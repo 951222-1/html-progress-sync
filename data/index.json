@@ -1,6 +1,6 @@
 {
-  "last_id": 1,
-  "updated_at": "2026-09-01T12:19:00Z",
+  "last_id": 2,
+  "updated_at": "2026-09-01T12:24:00Z",
   "items": [
     {
       "id": "0001",
@@ -11,6 +11,16 @@
       "summary": "完整彙整跨電腦同步架構、GitHub Pages 部署網址、人與 AI 下載 #0002 流程及 API SOP",
       "filename": "0001_sample_progress.html",
       "download_url": "data/html/0001_sample_progress.html"
+    },
+    {
+      "id": "0002",
+      "title": "防哽咽即時監測系統 —— 專案進度與技術架構彙整報告",
+      "author": "Antigravity AI Agent",
+      "status": "completed",
+      "timestamp": "2026-09-01T11:37:00Z",
+      "summary": "防哽咽即時監測系統專案進度與技術架構彙整報告 (Raspberry Pi 4B + ESP32-S3 Sense)",
+      "filename": "0002_anti_choking_system_progress.html",
+      "download_url": "data/html/0002_anti_choking_system_progress.html"
     }
   ]
 }
