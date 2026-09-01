@@ -1,0 +1,159 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>跨電腦 HTML 工作進度同步網頁與 AI 資料庫</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <header>
+            <div class="brand">
+                <h1>⚡ 跨電腦 HTML 工作進度同步網頁</h1>
+                <p>基於 GitHub 庫 + GitHub Pages 建立的跨電腦 AI 數據同步與 HTML 報告庫</p>
+            </div>
+            <div class="header-actions">
+                <button class="btn btn-outline" id="btnRefresh">🔄 重新整理</button>
+                <button class="btn btn-primary" id="btnToggleSettings">⚙️ GitHub 設定</button>
+            </div>
+        </header>
+
+        <!-- Stats Grid -->
+        <div class="stats-grid">
+            <div class="stat-card">
+                <div class="label">總進度報告數</div>
+                <div class="value" id="statTotal">0</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">最新分配序號</div>
+                <div class="value" id="statLastId">#0000</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">最後同步時間</div>
+                <div class="value" id="statUpdated" style="font-size: 1.2rem; margin-top: 10px;">--</div>
+            </div>
+        </div>
+
+        <!-- GitHub Settings Panel (Collapsible) -->
+        <div class="settings-panel hidden" id="settingsPanel">
+            <h3 style="margin-bottom: 8px;">⚙️ GitHub Token 與 Repo 設定</h3>
+            <p style="font-size: 0.85rem; color: var(--text-muted);">
+                填寫您的 GitHub 帳號與 Token (PAT)，以便在線上上傳 HTML 進度報告並即時寫入 GitHub 資料庫。
+            </p>
+            <form id="settingsForm">
+                <div class="settings-grid">
+                    <div class="form-group">
+                        <label>GitHub 帳號 (Owner)</label>
+                        <input type="text" id="repoOwner" value="951222-1" required>
+                    </div>
+                    <div class="form-group">
+                        <label>Repository 名稱 (Repo)</label>
+                        <input type="text" id="repoName" value="html-progress-sync" required>
+                    </div>
+                    <div class="form-group">
+                        <label>分支 (Branch)</label>
+                        <input type="text" id="repoBranch" value="main">
+                    </div>
+                    <div class="form-group">
+                        <label>Personal Access Token (PAT)</label>
+                        <input type="password" id="patToken" placeholder="ghp_xxxxxxxxxxxx" required>
+                    </div>
+                </div>
+                <div style="margin-top: 16px; text-align: right;">
+                    <button type="submit" class="btn btn-primary">儲存設定</button>
+                </div>
+            </form>
+        </div>
+
+        <!-- Main Content Layout -->
+        <div class="main-grid">
+            <!-- Left: Upload Form Card -->
+            <div class="card">
+                <div class="card-title">
+                    <span>📤 上傳工作進度 HTML</span>
+                </div>
+                <form id="uploadForm">
+                    <div class="form-group" style="margin-bottom: 12px;">
+                        <label>任務標題 *</label>
+                        <input type="text" id="taskTitle" placeholder="例如: 完成登入頁面模組開發" required>
+                    </div>
+
+                    <div class="form-group" style="margin-bottom: 12px;">
+                        <label>提交者 / AI 名稱</label>
+                        <input type="text" id="taskAuthor" placeholder="例如: AI-Computer-A" value="AI Assistant">
+                    </div>
+
+                    <div class="form-group" style="margin-bottom: 12px;">
+                        <label>進度狀態</label>
+                        <select id="taskStatus">
+                            <option value="completed">Completed (已完成)</option>
+                            <option value="in_progress">In Progress (進行中)</option>
+                            <option value="pending">Pending Review (待審核)</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group" style="margin-bottom: 12px;">
+                        <label>進度摘要與說明</label>
+                        <textarea id="taskSummary" rows="2" placeholder="簡述本次更新的內容與結果..."></textarea>
+                    </div>
+
+                    <div class="form-group" style="margin-bottom: 12px;">
+                        <label>選擇 HTML 檔案上傳</label>
+                        <input type="file" id="htmlFile" accept=".html,.htm">
+                    </div>
+
+                    <div class="form-group" style="margin-bottom: 16px;">
+                        <label>或直接貼上 HTML 碼 *</label>
+                        <textarea id="htmlContent" rows="6" placeholder="<!DOCTYPE html><html>...</html>" required></textarea>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary" style="width: 100%; justify-content: center;">
+                        🚀 上傳並分配自動序號
+                    </button>
+                </form>
+            </div>
+
+            <!-- Right: Items List Card -->
+            <div class="card">
+                <div class="card-title">
+                    <span>📋 工作進度歷史與同步列表</span>
+                </div>
+
+                <div class="list-controls">
+                    <input type="text" class="search-input form-group" id="searchInput" placeholder="🔍 搜尋序號、標題或說明...">
+                    <select id="statusFilter" style="padding: 10px; border-radius: 6px; border: 1px solid var(--border-color);">
+                        <option value="all">所有狀態</option>
+                        <option value="completed">Completed</option>
+                        <option value="in_progress">In Progress</option>
+                        <option value="pending">Pending Review</option>
+                    </select>
+                </div>
+
+                <div class="items-list" id="itemsList">
+                    <!-- Items rendered dynamically by app.js -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for HTML Preview -->
+    <div class="modal" id="previewModal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>👁️ HTML 進度報告線上預覽</h3>
+                <button class="btn btn-outline btn-sm" id="btnCloseModal">❌ 關閉</button>
+            </div>
+            <div class="modal-body">
+                <iframe id="previewFrame" title="HTML Preview"></iframe>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div class="toast-container" id="toastContainer"></div>
+
+    <script src="app.js"></script>
+</body>
+</html>
