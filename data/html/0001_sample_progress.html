@@ -3,33 +3,39 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>#0001 跨電腦 HTML 工作進度同步與 AI Agent 自動化 SOP 流程彙整</title>
+    <title>#0001 跨電腦 HTML 工作進度同步、防覆蓋原則與拉取/上傳完整 SOP 流程指南</title>
     <style>
         :root {
             --primary: #2563eb;
+            --primary-dark: #1d4ed8;
             --bg: #f8fafc;
             --card-bg: #ffffff;
             --text: #0f172a;
             --border: #e2e8f0;
+            --success-bg: #dcfce7;
+            --success-text: #166534;
+            --warning-bg: #fef9c3;
+            --warning-text: #854d0e;
         }
         body {
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
             line-height: 1.6;
-            max-width: 900px;
-            margin: 40px auto;
+            max-width: 920px;
+            margin: 30px auto;
             padding: 20px;
             background-color: var(--bg);
             color: var(--text);
         }
         .container {
             background: var(--card-bg);
-            padding: 32px;
+            padding: 36px;
             border-radius: 12px;
             box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1);
             border: 1px solid var(--border);
         }
         h1 { color: var(--primary); border-bottom: 2px solid var(--border); padding-bottom: 12px; margin-top: 0; font-size: 1.6rem; }
-        h2 { color: #1e293b; margin-top: 28px; border-left: 4px solid var(--primary); padding-left: 10px; font-size: 1.25rem; }
+        h2 { color: #1e293b; margin-top: 32px; border-left: 4px solid var(--primary); padding-left: 12px; font-size: 1.25rem; }
+        h3 { color: #334155; margin-top: 20px; font-size: 1.05rem; }
         .meta-grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
@@ -44,64 +50,110 @@
         .step-card {
             background: #fafafa;
             border: 1px solid var(--border);
-            padding: 18px;
+            padding: 20px;
             border-radius: 8px;
-            margin-bottom: 16px;
+            margin-bottom: 18px;
+        }
+        .alert-box {
+            background-color: #eff6ff;
+            border-left: 4px solid var(--primary);
+            padding: 14px 18px;
+            border-radius: 6px;
+            margin-bottom: 20px;
+        }
+        .alert-warning {
+            background-color: var(--warning-bg);
+            border-left: 4px solid #f59e0b;
+            color: var(--warning-text);
         }
         code { background: #e2e8f0; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 0.9em; }
         pre { background: #0f172a; color: #f8fafc; padding: 16px; border-radius: 8px; overflow-x: auto; font-size: 0.875rem; line-height: 1.5; }
         a { color: var(--primary); text-decoration: none; font-weight: 500; }
         a:hover { text-decoration: underline; }
+        ol, ul { padding-left: 22px; }
+        li { margin-bottom: 8px; }
     </style>
 </head>
 <body>
     <div class="container">
-        <h1>#0001 跨電腦 HTML 工作進度同步與 AI Agent 自動化 SOP 流程彙整</h1>
+        <h1>#0001 跨電腦 HTML 工作進度同步、防覆蓋原則與拉取/上傳完整 SOP 流程指南</h1>
         
         <div class="meta-grid">
             <div><strong>報告序號：</strong>#0001</div>
             <div><strong>提交者：</strong>Antigravity AI / System Admin</div>
             <div><strong>狀態：</strong><span class="badge">COMPLETED</span></div>
-            <div><strong>時間戳記：</strong>2026-09-01 12:19:00 (UTC+8)</div>
+            <div><strong>最後更新時間：</strong>2026-09-01 12:34:00 (UTC+8)</div>
         </div>
 
-        <h2>📌 1. 系統建置重點與成果 Summary</h2>
+        <div class="alert-box">
+            <strong>💡 本報告目的：</strong>為確保跨電腦與多台 AI Agent 協同工作時資料零遺失，本報告完整收錄了「資料庫架構」、「拉取/下載最新進度流程」、「上傳新進度 3 種 SOP 方法」以及「核心防覆蓋原則」。
+        </div>
+
+        <h2>🛡️ 1. 資料防覆蓋的核心原則 (Single Source of Truth)</h2>
         <div class="step-card">
+            <p><strong>為什麼檔案可能會被覆蓋？</strong></p>
+            <p>當別台電腦或 AI 透過網頁在雲端上傳了新報告（如 <code>#0002</code>），而本機電腦在未同步最新的 <code>data/index.json</code> 之前直接強制推送本機檔案，本機舊的索引就會蓋掉雲端新的索引。</p>
+            <p><strong>防覆蓋黃金原則：</strong><code>先讀取最新雲端，再追加上傳 (Pull-Before-Push)</code></p>
             <ul>
-                <li><strong>儲存庫與網站建置</strong>：已建立 GitHub 專案 <code>951222-1/html-progress-sync</code> 並成功部署 GitHub Pages。</li>
-                <li><strong>線上儀表板</strong>：發布至 <a href="https://951222-1.github.io/html-progress-sync/" target="_blank">https://951222-1.github.io/html-progress-sync/</a>，支援線上預覽與自動遞增序號上傳。</li>
-                <li><strong>AI Agent 文件與工具</strong>：建立 <code>AI_AGENT_GUIDE.md</code> 與 <code>ai_sync.py</code>，供跨電腦 AI 進行無縫閱讀與自動同步。</li>
+                <li><strong>網頁 Web UI 與 <code>ai_sync.py</code></strong>：在上傳瞬間會自動連線 GitHub 讀取最新 <code>data/index.json</code>，計算出下一序號（如 <code>#0003</code>）後追加寫回，<strong>100% 安全且不會覆蓋先前資料</strong>。</li>
+                <li><strong>執行本機 <code>deploy.bat</code> 時</strong>：執行前先執行一次拉取同步（<code>python ai_sync.py pull</code>），即可確保本機與雲端完美一致。</li>
             </ul>
         </div>
 
-        <h2>🔄 2. 下載與閱讀 #0002 進度報告之標準流程 (Workflow)</h2>
+        <h2>📥 2. 如何拉取/下載最新進度報告 (Pull Process)</h2>
         <div class="step-card">
-            <h3>👤 人類（朋友/同事）閱讀方式：</h3>
+            <h3>方式 A：真人（同事/朋友）拉取與線上閱讀</h3>
             <ol>
-                <li>開啟線上網頁：<a href="https://951222-1.github.io/html-progress-sync/" target="_blank">https://951222-1.github.io/html-progress-sync/</a></li>
-                <li>在列表中找到序號 <code>#0002</code> 項目。</li>
-                <li>點擊 <strong>「👁️ 線上預覽」</strong> 即可直接閱讀內容；或點擊 <strong>「📥 下載 HTML」</strong> 保存實體檔案。</li>
+                <li>開啟線上網頁儀表板：<a href="https://951222-1.github.io/html-progress-sync/" target="_blank">https://951222-1.github.io/html-progress-sync/</a></li>
+                <li>點擊列表中的 <strong>「👁️ 線上預覽」</strong>：可在彈窗中直接閱讀報告內容。</li>
+                <li>點擊 <strong>「📥 下載 HTML」</strong>：將檔案儲存至本地電腦。</li>
             </ol>
 
-            <h3 style="margin-top:20px;">🤖 另一台電腦 AI Agent 自動化閱讀方式：</h3>
-            <p>將以下 Prompt 複製貼給另一台電腦的 AI：</p>
-            <pre>請連線至我們的 GitHub 學習進度庫下載並閱讀 #0002：
-- 庫位址: 951222-1/html-progress-sync
+            <h3 style="margin-top:20px;">方式 B：另一台電腦 AI Agent 自動化拉取</h3>
+            <p>複製以下 Prompt 發送給另一台電腦的 AI：</p>
+            <pre>請連線至 GitHub 學習進度庫下載最新報告：
+- Repo: 951222-1/html-progress-sync
 - 索引 API: https://raw.githubusercontent.com/951222-1/html-progress-sync/main/data/index.json
 
 步驟：
-1. 讀取 data/index.json 尋找 "id": "0002" 之 download_url。
-2. 下載 data/html/0002_*.html。
-3. 閱讀其中的完成重點與下一步目標，接續進行工作。</pre>
+1. 讀取 data/index.json 獲取最新的 last_id 與對應項目的 download_url。
+2. 下載對應之 data/html/*.html 檔案到本地。
+3. 閱讀進度報告內容，接續執行下一步目標。</pre>
+
+            <h3 style="margin-top:20px;">方式 C：CLI 工具一鍵拉取同步到本地</h3>
+            <pre>python ai_sync.py pull --owner 951222-1 --repo html-progress-sync</pre>
         </div>
 
-        <h2>🛠️ 3. 專案核心檔案指引</h2>
+        <h2>🚀 3. 如何上傳新進度報告 (Upload / Push Process)</h2>
+        <div class="step-card">
+            <h3>方法一：經由網頁儀表板上傳（最推薦、最安全、100% 防覆蓋）</h3>
+            <ol>
+                <li>開啟線上網站：<a href="https://951222-1.github.io/html-progress-sync/" target="_blank">https://951222-1.github.io/html-progress-sync/</a></li>
+                <li>點擊右上角 <strong><code>⚙️ GitHub 設定</code></strong>，確認已填入 PAT Token。</li>
+                <li>在左側表單輸入<strong>任務標題</strong>、<strong>提交者名稱</strong>、<strong>狀態</strong>與<strong>摘要說明</strong>。</li>
+                <li>點擊按鈕選擇要上傳的 HTML 檔案，或直接在文字框貼上 HTML 內文。</li>
+                <li>點擊 <strong><code>🚀 上傳並分配自動序號</code></strong> 藍色按鈕。</li>
+                <li><em>(系統會自動從 GitHub 讀取最新序號、加 1 自動分配新編號如 <code>#0003</code> 並即時更新列表)</em>。</li>
+            </ol>
+
+            <h3 style="margin-top:20px;">方法二：另一台電腦 AI Agent 自動發布</h3>
+            <p>指示 AI 執行下方 Push 指令：</p>
+            <pre>python ai_sync.py push --owner 951222-1 --repo html-progress-sync --token <YOUR_PAT_TOKEN> --title "本次任務標題" --file my_report.html --status completed --summary "任務摘要"</pre>
+
+            <h3 style="margin-top:20px;">方法三：本機修改程式後經由 <code>deploy.bat</code> 一鍵發布</h3>
+            <ol>
+                <li>先執行一次拉取同步：<code>python ai_sync.py pull --owner 951222-1 --repo html-progress-sync</code></li>
+                <li>雙擊執行資料夾中的 <strong><code>deploy.bat</code></strong>。</li>
+            </ol>
+        </div>
+
+        <h2>📂 4. 專案核心檔案架構與指引</h2>
         <div class="step-card">
             <ul>
-                <li><code>index.html</code> - Web 儀表板 UI (瀏覽、預覽、線上上傳)</li>
-                <li><code>AI_AGENT_GUIDE.md</code> - 專為跨電腦 AI 設計的操作手冊與 API 規格</li>
+                <li><code>index.html</code> - Web 儀表板 (進度列表、線上預覽與安全上傳表單)</li>
+                <li><code>AI_AGENT_GUIDE.md</code> - 給跨電腦 AI Agent 學習與執行的 API SOP 文件</li>
                 <li><code>ai_sync.py</code> - 跨電腦 CLI 同步工具 (支援 <code>list</code>, <code>pull</code>, <code>push</code>)</li>
-                <li><code>deploy.bat</code> - Windows 一鍵自動上傳推送到 GitHub 工具</li>
+                <li><code>deploy.bat</code> - 本機 Windows 一鍵自動上傳部署工具</li>
             </ul>
         </div>
     </div>
