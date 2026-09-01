@@ -1,6 +1,6 @@
 {
-  "last_id": 2,
-  "updated_at": "2026-09-01T12:34:00Z",
+  "last_id": 3,
+  "updated_at": "2026-09-01T05:05:21Z",
   "items": [
     {
       "id": "0001",
@@ -21,6 +21,16 @@
       "summary": "防哽咽即時監測系統專案進度與技術架構彙整報告 (Raspberry Pi 4B + ESP32-S3 Sense)",
       "filename": "0002_anti_choking_system_progress.html",
       "download_url": "data/html/0002_anti_choking_system_progress.html"
+    },
+    {
+      "id": "0003",
+      "title": "防哽咽即時監測系統 —— 手機 Web AI 獨立版移植與全球跨網域部署",
+      "author": "Antigravity AI Agent",
+      "status": "completed",
+      "timestamp": "2026-09-01T05:05:21Z",
+      "summary": "完成純前端 Web AI (MediaPipe JS + Web Audio) 移植、攻克 iPhone Safari 相機權限、支援 4G/5G 跨網域連線與 GitHub 私人專案託管",
+      "filename": "0003_anti_choking_mobile_web_system.html",
+      "download_url": "data/html/0003_anti_choking_mobile_web_system.html"
     }
   ]
 }
