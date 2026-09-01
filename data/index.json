@@ -1,14 +1,14 @@
 {
   "last_id": 2,
-  "updated_at": "2026-09-01T12:24:00Z",
+  "updated_at": "2026-09-01T12:34:00Z",
   "items": [
     {
       "id": "0001",
-      "title": "跨電腦 HTML 工作進度同步與 AI Agent 自動化 SOP 流程彙整",
+      "title": "跨電腦 HTML 工作進度同步、防覆蓋原則與拉取/上傳完整 SOP 流程指南",
       "author": "Antigravity AI / System Admin",
       "status": "completed",
-      "timestamp": "2026-09-01T12:19:00Z",
-      "summary": "完整彙整跨電腦同步架構、GitHub Pages 部署網址、人與 AI 下載 #0002 流程及 API SOP",
+      "timestamp": "2026-09-01T12:34:00Z",
+      "summary": "完整收錄防覆蓋核心原則、人類與 AI 拉取/下載最新進度流程、以及 3 種超詳細上傳新進度 SOP 方法",
       "filename": "0001_sample_progress.html",
       "download_url": "data/html/0001_sample_progress.html"
     },
