@@ -70,16 +70,16 @@ def cmd_list(args):
     """List all progress reports in terminal."""
     db = fetch_index(args.owner, args.repo, args.branch, args.token)
     items = db.get("items", [])
-    print(f"\n=======================================================")
-    print(f" 📋 進度庫列表 (Repo: {args.owner}/{args.repo})")
-    print(f" 總數: {len(items)} | 最新序號: #{db.get('last_id', 0):04d}")
-    print(f"=======================================================")
-    print(f"{'序號':<8} {'狀態':<12} {'提交者':<15} {'標題'}")
-    print(f"-------------------------------------------------------")
+    print("\n=======================================================")
+    print(f" Progress Database List (Repo: {args.owner}/{args.repo})")
+    print(f" Total: {len(items)} | Latest Serial ID: #{db.get('last_id', 0):04d}")
+    print("=======================================================")
+    print(f"{'ID':<8} {'Status':<12} {'Author':<15} {'Title'}")
+    print("-------------------------------------------------------")
     for item in sorted(items, key=lambda x: int(x['id'])):
         status_tag = f"[{item.get('status', 'N/A')}]"
         print(f"#{item['id']:<7} {status_tag:<12} {item.get('author', 'N/A'):<15} {item['title']}")
-    print(f"=======================================================\n")
+    print("=======================================================\n")
 
 def cmd_pull(args):
     """Download missing HTML progress files locally."""
