@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>#0003 防哽咽即時監測系統 —— 手機 Web 獨立版移植與跨網域部署報告</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; line-height: 1.6; max-width: 900px; margin: 30px auto; padding: 20px; color: #0f172a; background-color: #f8fafc; }
+        h1 { color: #1e3a8a; border-bottom: 3px solid #3b82f6; padding-bottom: 10px; font-size: 1.8rem; }
+        h2 { color: #1e40af; margin-top: 25px; border-bottom: 1px solid #cbd5e1; padding-bottom: 5px; font-size: 1.3rem; }
+        .meta-box { background: #ffffff; border: 1px solid #e2e8f0; padding: 18px; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; font-size: 0.95em; }
+        .badge { background: #10b981; color: white; padding: 3px 10px; border-radius: 6px; font-weight: bold; font-size: 0.85em; display: inline-block; }
+        .card { background: #ffffff; border: 1px solid #e2e8f0; padding: 18px; border-radius: 10px; margin-bottom: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+        code { background: #f1f5f9; color: #0f172a; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 0.9em; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9em; }
+        th, td { border: 1px solid #cbd5e1; padding: 10px; text-align: left; }
+        th { background-color: #f1f5f9; color: #1e293b; }
+        ul { padding-left: 20px; }
+        li { margin-bottom: 6px; }
+        .alert-l3 { background-color: #fef2f2; border-left: 4px solid #ef4444; padding: 10px 15px; margin-bottom: 8px; border-radius: 4px; }
+        .alert-l2 { background-color: #fffbebfb; border-left: 4px solid #f59e0b; padding: 10px 15px; margin-bottom: 8px; border-radius: 4px; }
+        .alert-l1 { background-color: #eff6ff; border-left: 4px solid #3b82f6; padding: 10px 15px; margin-bottom: 8px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+
+    <h1>🛡️ 防哽咽即時監測系統 —— 手機 Web 獨立版移植與全球部署彙整 (#0003)</h1>
+    
+    <div class="meta-box">
+        <div class="meta-grid">
+            <div><strong>檔案序號 (ID)：</strong> <code>0003</code></div>
+            <div><strong>任務標題：</strong> 手機 Web AI 獨立版開發與跨網域部署</div>
+            <div><strong>執行 AI：</strong> Antigravity AI Agent</div>
+            <div><strong>任務狀態：</strong> <span class="badge">COMPLETED</span></div>
+            <div><strong>同步時間：</strong> 2026-09-01T12:55:00Z</div>
+            <div><strong>適用環境：</strong> 智慧型手機 (iOS Safari / Android Chrome) + Web AI</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>📱 一、技術架構升級：擺脫樹莓派硬體限制 (純前端 Web AI)</h2>
+        <div class="card">
+            <ul>
+                <li><strong>完全免除外部硬體</strong>：打破以往必須依賴樹莓派 4B 與 ESP32-S3 鏡頭模組的限制，直接利用個人智慧型手機 (iPhone / Android) 晶片與內建鏡頭、麥克風運行。</li>
+                <li><strong>手機端原生 AI 加速</strong>：整合 Google MediaPipe Tasks for JavaScript (WebAssembly / WebGL GPU 加速)，在手機瀏覽器實現高達 30 FPS 的人臉 478 關鍵點與手部 21 關節骨架追蹤。</li>
+                <li><strong>Web Audio 聲學咳嗽分析</strong>：利用 HTML5 Web Audio API 建立即時頻譜分析器，鎖定 300Hz~2500Hz 咳嗽突發特徵音訊，實現純前端聲學防護。</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>🧠 二、核心演算法 100% 完整移植</h2>
+        <div class="card">
+            <ul>
+                <li><strong>A1 國際窒息手勢判定</strong>：自適應喉嚨圈半徑 $R = 0.6 \times \text{臉高}$，手部關鍵點進入喉嚨圈必須<strong>連續維持 ≥ 15 幀 (~0.5 秒)</strong> 觸發 L3 窒息警報。</li>
+                <li><strong>S1 無聲窒息監測</strong>：嘴巴張開 ($\text{MAR} > 0.45$) 且下巴運動靜止且環境無聲持續超過 3.0 秒觸發預警。</li>
+                <li><strong>咀嚼吞嚥狀態機與卡喉超時</strong>：$\text{IDLE} \rightarrow \text{INGEST} \rightarrow \text{CHEW} \rightarrow \text{SWALLOW}$，閉嘴咀嚼超過 4.0 秒未吞嚥觸發卡喉預警。</li>
+                <li><strong>手機專屬多模態警報</strong>：全螢幕紅色警報橫幅、Web Audio 高頻警報音效、手機硬體震動 API (`navigator.vibrate`) 與 LINE Notify 串接。</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>🌐 三、跨網域使用與 iPhone Safari 相機權限解決方案</h2>
+        <div class="card">
+            <ul>
+                <li><strong>解決 iPhone WebKit 嚴格限制</strong>：針對 iOS Safari 限制非信任 IP 無法存取 WebRTC 相機之問題，內建整合 Cloudflare Trusted SSL 安全通道，獲得全球官方認證 HTTPS 綠色鎖頭 🔒。</li>
+                <li><strong>免受 Wi-Fi 限制（全球 4G/5G 直連）</strong>：透過 Cloudflare 穿透或免費部署至 GitHub Pages / Vercel，使用者在任何地方、任何網路均可一鍵開啟。</li>
+                <li><strong>原始碼隱私保護</strong>：支援 GitHub Private（私人專案）連動 Vercel 免費託管，兼顧原始碼保密與手機端即時公開使用。</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>📈 四、本次交付檔案清單</h2>
+        <div class="card">
+            <ul>
+                <li>✅ <code>mobile_web/index.html</code>：手機專屬深色模式響應式監控介面。</li>
+                <li>✅ <code>mobile_web/app.js</code>：Web AI 核心引擎（MediaPipe + Web Audio + 狀態機）。</li>
+                <li>✅ <code>mobile_web/style.css</code>：行動端專用 UI 與警報動畫樣式表。</li>
+                <li>✅ <code>mobile_web/server.py</code>：智慧偵測 IP 與自動建立 Cloudflare 安全通道之本機伺服器。</li>
+                <li>✅ <code>啟動手機網頁版.bat</code>：Windows 一鍵開啟批次檔。</li>
+            </ul>
+        </div>
+    </div>
+
+    <div style="text-align: center; font-size: 0.85em; color: #64748b; margin-top: 30px;">
+        防哽咽即時監測系統 AI Agent 同步進度報告 • ID: 0003
+    </div>
+
+</body>
+</html>
