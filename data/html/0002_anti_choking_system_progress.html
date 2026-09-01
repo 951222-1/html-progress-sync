@@ -1,0 +1,105 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>#0002 防哽咽即時監測系統 —— 專案進度與技術架構彙整報告</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; line-height: 1.6; max-width: 900px; margin: 30px auto; padding: 20px; color: #0f172a; background-color: #f8fafc; }
+        h1 { color: #1e3a8a; border-bottom: 3px solid #3b82f6; padding-bottom: 10px; font-size: 1.8rem; }
+        h2 { color: #1e40af; margin-top: 25px; border-bottom: 1px solid #cbd5e1; padding-bottom: 5px; font-size: 1.3rem; }
+        .meta-box { background: #ffffff; border: 1px solid #e2e8f0; padding: 18px; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); }
+        .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 10px; font-size: 0.95em; }
+        .badge { background: #10b981; color: white; padding: 3px 10px; border-radius: 6px; font-weight: bold; font-size: 0.85em; display: inline-block; }
+        .card { background: #ffffff; border: 1px solid #e2e8f0; padding: 18px; border-radius: 10px; margin-bottom: 15px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+        code { background: #f1f5f9; color: #0f172a; padding: 2px 6px; border-radius: 4px; font-family: monospace; font-size: 0.9em; }
+        table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 0.9em; }
+        th, td { border: 1px solid #cbd5e1; padding: 10px; text-align: left; }
+        th { background-color: #f1f5f9; color: #1e293b; }
+        ul { padding-left: 20px; }
+        li { margin-bottom: 6px; }
+        .alert-l3 { background-color: #fef2f2; border-left: 4px solid #ef4444; padding: 10px 15px; margin-bottom: 8px; border-radius: 4px; }
+        .alert-l2 { background-color: #fffbebfb; border-left: 4px solid #f59e0b; padding: 10px 15px; margin-bottom: 8px; border-radius: 4px; }
+        .alert-l1 { background-color: #eff6ff; border-left: 4px solid #3b82f6; padding: 10px 15px; margin-bottom: 8px; border-radius: 4px; }
+    </style>
+</head>
+<body>
+
+    <h1>🛡️ 防哽咽即時監測系統 —— 專案進度與技術架構彙整報告 (#0002)</h1>
+    
+    <div class="meta-box">
+        <div class="meta-grid">
+            <div><strong>檔案序號 (ID)：</strong> <code>0002</code></div>
+            <div><strong>任務標題：</strong> 防哽咽即時監測系統技術彙整</div>
+            <div><strong>執行 AI：</strong> Antigravity AI Agent</div>
+            <div><strong>任務狀態：</strong> <span class="badge">COMPLETED</span></div>
+            <div><strong>同步時間：</strong> 2026-09-01T11:37:00Z</div>
+            <div><strong>適用環境：</strong> Raspberry Pi 4B + ESP32-S3 Sense</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>📐 一、三端硬體裝置與網路拓撲彙整</h2>
+        <div class="card">
+            <ul>
+                <li><strong>ESP32-S3 Sense (前端採集)</strong>：Seeed Studio XIAO ESP32S3 (雙核 240MHz + 8MB PSRAM)，搭載 OV2640 鏡頭 (QVGA ~20FPS) 與板載 PDM 數位麥克風 (GPIO 41/42 採集 16kHz PCM 音訊)。</li>
+                <li><strong>Raspberry Pi 4B (邊緣 AI 大腦)</strong>：Debian 13，部署獨立 Python 3.12 運行 MediaPipe (478 人臉關鍵點 + 21 手部關節骨架) 與 YAMNet 聲音模型。wlan0 連局域網；wlan1 廣播獨立 AP 熱點 <code>aaaa</code> (10.42.0.1)。</li>
+                <li><strong>PC / 筆記型電腦 (監控與開發)</strong>：雙網卡直連熱點，透過 <code>pc_receiver_ui.py</code> 監控，並以 <code>arduino-cli 1.5.1</code> 於 <code>COM4</code> 背景自動編譯與燒錄。</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>🧠 二、哽噎與嗆咳判定演算法與特徵資訊</h2>
+        <div class="card">
+            <ul>
+                <li><strong>手抓喉嚨特徵 (A1 國際通用窒息手勢)</strong>：粉紅色喉嚨圈自適應半徑 R = 0.6 × 臉高。手部 21 關鍵點進入喉嚨圈必須<strong>連續維持 ≥ 15 幀 (約 0.5 秒)</strong>，防止拿湯匙用餐掠過的誤判。</li>
+                <li><strong>身體劇烈晃動 (掙扎反應)</strong>：鼻子關鍵點 p4 無因次化位移 norm_disp = Δposition / face_size。1 秒 (30 幀) 滑動視窗內累計位移 > 1.5 判定為 <code>body_shaking = True</code>。</li>
+                <li><strong>YAMNet 聲學咳嗽模型</strong>：16kHz 採樣率 PCM 音訊串流，咳嗽信心度分數 ≥ 0.15 更新咳嗽時間戳。</li>
+                <li><strong>咀嚼吞嚥狀態機</strong>：<code>張嘴</code> → <code>閉嘴(咀嚼)</code> → <code>下巴上提(吞嚥)</code>。閉嘴咀嚼時間超過 <strong>4.0 秒</strong> 未吞嚥觸發卡喉預警。</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>🚨 三、分級警報決策矩陣 (Decision Matrix)</h2>
+        <div class="alert-l3">
+            <strong>🚨 哽噎警報 (Choking L3) [最高級]</strong><br>
+            • 規則 A：手抓喉嚨 ≥ 5.0 秒 且 5 秒內伴隨咳嗽。<br>
+            • 規則 B：手抓喉嚨 ≥ 1.0 秒 且伴隨身體劇烈晃動 (掙扎)。<br>
+            <em>動作：聲光警報、Web UI 紅色閃爍、SQLite 寫入並發送 LINE 廣播。</em>
+        </div>
+
+        <div class="alert-l2">
+            <strong>🚨 劇烈嗆咳警報 (Severe Cough L2) [中高級]</strong><br>
+            • 條件：偵測到咳嗽，且同時伴隨身體劇烈晃動 (前傾掙扎)。
+        </div>
+
+        <div class="alert-l1">
+            <strong>⚠️ 一般嗆咳警報 (Standard Cough L1) [初級]</strong><br>
+            • 條件：單獨偵測到咳嗽，手部未停留於脖子且無劇烈晃動。
+        </div>
+
+        <div class="card">
+            <strong>⚠️ 卡喉/咀嚼超時預警</strong>：閉嘴咀嚼超過 4.0 秒未完成吞嚥。
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>📈 四、專案已完成進度總結</h2>
+        <div class="card">
+            <ul>
+                <li>✅ 成功建置 樹莓派 Python 3.12 獨立環境，解決 Debian 13 aarch64 無 MediaPipe 套件問題。</li>
+                <li>✅ 喉嚨圈半徑優化至 0.6、確認時間提升至 15 幀，完美消除湯匙用餐誤判。</li>
+                <li>✅ 完成 🔴 紅嘴唇 (20點)、🌸 粉紅喉嚨圈 與 🎛️ 橘黃手骨架 (21點) 之即時繪製。</li>
+                <li>✅ 安裝 Arduino CLI 1.5.1 實現 COM4 背景一鍵燒錄。</li>
+            </ul>
+        </div>
+    </div>
+
+    <div style="text-align: center; font-size: 0.85em; color: #64748b; margin-top: 30px;">
+        防哽咽即時監測系統 AI Agent 同步進度報告 • ID: 0002
+    </div>
+
+</body>
+</html>
