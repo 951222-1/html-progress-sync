@@ -1,6 +1,6 @@
 {
-  "last_id": 1,
-  "updated_at": "2026-09-01T10:45:00Z",
+  "last_id": 2,
+  "updated_at": "2026-09-01T11:37:00Z",
   "items": [
     {
       "id": "0001",
@@ -11,6 +11,16 @@
       "summary": "成功建立 HTML 進度同步網站基礎架構與 API 介面。",
       "filename": "0001_sample_progress.html",
       "download_url": "data/html/0001_sample_progress.html"
+    },
+    {
+      "id": "0002",
+      "title": "防哽咽即時監測系統 —— 專案進度與技術架構彙整報告",
+      "author": "Antigravity AI Agent",
+      "status": "completed",
+      "timestamp": "2026-09-01T11:37:00Z",
+      "summary": "彙整三端硬體拓撲 (ESP32-S3 Sense / RPi 4B / PC)、多模態哽噎與嗆咳演算法特徵 (喉嚨圈 R=0.6, 15幀防誤判, 劇烈晃動掙扎位移) 與分級警報矩陣。",
+      "filename": "0002_anti_choking_system_progress.html",
+      "download_url": "data/html/0002_anti_choking_system_progress.html"
     }
   ]
 }
