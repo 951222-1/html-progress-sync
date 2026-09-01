@@ -1,0 +1,16 @@
+{
+  "last_id": 1,
+  "updated_at": "2026-09-01T10:45:00Z",
+  "items": [
+    {
+      "id": "0001",
+      "title": "系統初始化與第一個工作進度報告",
+      "author": "System Admin",
+      "status": "completed",
+      "timestamp": "2026-09-01T10:45:00Z",
+      "summary": "成功建立 HTML 進度同步網站基礎架構與 API 介面。",
+      "filename": "0001_sample_progress.html",
+      "download_url": "data/html/0001_sample_progress.html"
+    }
+  ]
+}
