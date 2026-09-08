@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>#0004 防哽咽即時監測系統 —— Supabase/WebRTC 遠端雙端與物理吞嚥狀態機升級報告</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; line-height: 1.6; max-width: 920px; margin: 30px auto; padding: 20px; color: #0f172a; background-color: #f8fafc; }
+        h1 { color: #1e3a8a; border-bottom: 3px solid #3b82f6; padding-bottom: 12px; font-size: 1.85rem; }
+        h2 { color: #1e40af; margin-top: 28px; border-bottom: 1px solid #cbd5e1; padding-bottom: 6px; font-size: 1.35rem; }
+        .meta-box { background: #ffffff; border: 1px solid #e2e8f0; padding: 20px; border-radius: 12px; margin-bottom: 25px; shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; font-size: 0.95em; }
+        .badge { background: #10b981; color: white; padding: 4px 12px; border-radius: 6px; font-weight: bold; font-size: 0.85em; display: inline-block; }
+        .card { background: #ffffff; border: 1px solid #e2e8f0; padding: 18px; border-radius: 10px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+        code { background: #f1f5f9; color: #0f172a; padding: 2px 6px; border-radius: 4px; font-family: "JetBrains Mono", Consolas, monospace; font-size: 0.9em; }
+        table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 0.92em; }
+        th, td { border: 1px solid #cbd5e1; padding: 10px 14px; text-align: left; }
+        th { background-color: #f1f5f9; color: #1e293b; font-weight: 700; }
+        ul { padding-left: 22px; }
+        li { margin-bottom: 8px; }
+        .alert-l4 { background-color: #fef2f2; border-left: 5px solid #ef4444; padding: 12px 16px; margin-bottom: 10px; border-radius: 4px; }
+        .tag-pill { background: #e0e7ff; color: #3730a3; padding: 2px 8px; border-radius: 12px; font-size: 0.82em; font-weight: 600; }
+    </style>
+</head>
+<body>
+
+    <h1>🛡️ 防哽咽即時監測系統 —— 遠端雙端架構與物理吞嚥辨識升級報告 (#0004)</h1>
+    
+    <div class="meta-box">
+        <div class="meta-grid">
+            <div><strong>檔案序號 (ID)：</strong> <code>0004</code></div>
+            <div><strong>任務標題：</strong> 防哽咽系統 遠端雙端監看、4階質地異常與吞嚥辨識</div>
+            <div><strong>執行 AI：</strong> Antigravity AI Agent</div>
+            <div><strong>任務狀態：</strong> <span class="badge">COMPLETED</span></div>
+            <div><strong>同步時間：</strong> 2026-09-08T15:27:00Z</div>
+            <div><strong>適用環境：</strong> Supabase BaaS + WebRTC P2P + Cloudflare Tunnel</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>🌐 一、架構進化：Supabase 雲端 Serverless + WebRTC 點對點串流</h2>
+        <div class="card">
+            <ul>
+                <li><strong>Supabase BaaS 雲端後端</strong>：完全替代實體主機需求，提供 <code>patient_profiles</code> (個人化自適應基準)、<code>meal_sessions</code> (每餐品質統計) 與 <code>anomaly_logs</code> 事件資料庫。</li>
+                <li><strong>WebRTC P2P 低延遲串流</strong>：採用 Supabase Realtime Channel 作為 Signalling 信令，實現個案手機相機與照護者 Dashboard 之間的低延遲影音實時傳輸。</li>
+                <li><strong>Cloudflare SSL 通道整合</strong>：克服瀏覽器權限限制，自動發行綠色鎖頭 (🔒 HTTPS) 網址，確保 iPhone Safari / Android Chrome 無縫啟動鏡頭與麥克風。</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>🧠 二、4 階動態質地異常監測與物理吞嚥辨識狀態機</h2>
+        <div class="card">
+            <table>
+                <thead>
+                    <tr>
+                        <th>監測階層</th>
+                        <th>判定觸發特徵</th>
+                        <th>處置與反饋機制</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>💧 物理吞嚥辨識</strong></td>
+                        <td>停頓 $0.8s \sim 1.8s$ 且嘴巴閉合 $MAR \le 0.15$</td>
+                        <td><span class="tag-pill" style="background:#dbeafe;color:#1e40af;">✨ 成功吞嚥 + C5/E5 叮咚音效</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>🟡 Level 1 (10s 發呆)</strong></td>
+                        <td>下巴靜止 $\ge 10.0$ 秒未咀嚼</td>
+                        <td>播放溫和語音播報（「請記得嚼一嚼吞下來喔」）</td>
+                    </tr>
+                    <tr>
+                        <td><strong>🔴 Level 2 (20s 嚴重超時)</strong></td>
+                        <td>下巴靜止 $\ge 20.0$ 秒卡喉</td>
+                        <td>蜂鳴警示音 + 遠端 Supabase 即時跳窗推播</td>
+                    </tr>
+                    <tr>
+                        <td><strong>⚠️ Level 3 (少咀嚼吞嚥)</strong></td>
+                        <td>普通/軟食咀嚼 $< 7$ 下即停頓 且 雙手扶頸</td>
+                        <td>判定為高風險哽咽預兆，發出注意事項</td>
+                    </tr>
+                    <tr>
+                        <td><strong>🚨 Level 4 (急劇嗆咳爆發)</strong></td>
+                        <td>下巴速度 $|\text{Velocity}| \ge 25.0$ 且 (聲學爆發 $\ge 0.18$ 或 手扶頸)</td>
+                        <td><span class="tag-pill" style="background:#fee2e2;color:#991b1b;">0.5 秒內發動最優先級全網警報</span></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+
+        <div class="alert-l4">
+            <strong>🎯 個人化動態基準自適應校正 ($\mu \pm \sigma$)：</strong><br>
+            前 3 餐採套用實測臨床基準（咀嚼 0.68-1.03s，吞嚥停頓 0.8-1.3s），第 4 餐起自動根據 Supabase 歷史數據計算該長者專屬之咀嚼與吞嚥平均值，大幅降低誤報率！
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>📦 三、本次交付檔案彙整</h2>
+        <div class="card">
+            <ul>
+                <li>✅ <code>mobile_web/supabase_schema.sql</code>：Supabase 資料庫 SQL 建表檔。</li>
+                <li>✅ <code>mobile_web/config.js</code>：全域憑證、WebRTC 設定與 4 階門檻檔。</li>
+                <li>✅ <code>mobile_web/index.html</code>：被照護者相機端 Web UI（含 PIN 登入與 HUD）。</li>
+                <li>✅ <code>mobile_web/caregiver.html</code>：遠端照護者 Dashboard 大儀表板。</li>
+                <li>✅ <code>mobile_web/app.js</code>：被照護者 AI 引擎（MediaPipe + 物理吞嚥狀態機）。</li>
+                <li>✅ <code>mobile_web/caregiver.js</code>：照護者 Dashboard 引擎（WebRTC + Realtime + Chart.js）。</li>
+                <li>✅ <code>mobile_web/server.py</code>：智慧 Python Web 伺服器與 Cloudflare SSL 自動通道。</li>
+                <li>✅ <code>啟動手機網頁版.bat</code>：Windows 一鍵啟動腳本。</li>
+            </ul>
+        </div>
+    </div>
+
+    <div style="text-align: center; font-size: 0.85em; color: #64748b; margin-top: 30px;">
+        防哽咽即時監測系統 AI Agent 同步進度報告 • ID: 0004
+    </div>
+
+</body>
+</html>
