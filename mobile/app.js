@@ -111,44 +111,73 @@ let sirenOscillator = null;
 let sirenGain = null;
 
 // ============================================================
-// 1. 初始化與載入 MediaPipe AI 模型
+// 1. 初始化與載入 MediaPipe AI 模型 (GPU/CPU 雙重相容 + 並行加速)
 // ============================================================
 async function initMediaPipe() {
+    // 設置 10 秒防卡死安全定時器
+    const safetyTimer = setTimeout(() => {
+        if (!faceLandmarker || !handLandmarker) {
+            console.warn("⚠️ 載入超時，自動隱藏遮罩以允許手動啟動");
+            loadingOverlay.classList.add("hidden");
+        }
+    }, 10000);
+
     try {
-        loadingText.textContent = "正在載入 Vision 運行環境 (WASM)...";
+        loadingText.textContent = "正在載入 AI 核心環境 (WASM)...";
         const vision = await FilesetResolver.forVisionTasks(
             "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.14/wasm"
         );
 
-        loadingText.textContent = "正在下載 Face Landmarker 模型 (478 點)...";
-        faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-            baseOptions: {
-                modelAssetPath: "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task",
-                delegate: "GPU"
-            },
-            runningMode: "VIDEO",
-            numFaces: 1,
-            minFaceDetectionConfidence: 0.5,
-            minTrackingConfidence: 0.6
-        });
+        loadingText.textContent = "正在載入視覺 AI 模型 (人臉 + 手部)...";
 
-        loadingText.textContent = "正在下載 Hand Landmarker 模型 (21 點)...";
-        handLandmarker = await HandLandmarker.createFromOptions(vision, {
-            baseOptions: {
-                modelAssetPath: "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task",
-                delegate: "GPU"
-            },
-            runningMode: "VIDEO",
-            numHands: 2,
-            minHandDetectionConfidence: 0.3,
-            minTrackingConfidence: 0.3
-        });
+        const faceModelUrl = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+        const handModelUrl = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task";
 
+        // 輔助建立函式 (支援 GPU / CPU 自動容錯切換)
+        async function loadFaceModel(del) {
+            return await FaceLandmarker.createFromOptions(vision, {
+                baseOptions: { modelAssetPath: faceModelUrl, delegate: del },
+                runningMode: "VIDEO",
+                numFaces: 1,
+                minFaceDetectionConfidence: 0.4,
+                minTrackingConfidence: 0.5
+            });
+        }
+
+        async function loadHandModel(del) {
+            return await HandLandmarker.createFromOptions(vision, {
+                baseOptions: { modelAssetPath: handModelUrl, delegate: del },
+                runningMode: "VIDEO",
+                numHands: 2,
+                minHandDetectionConfidence: 0.3,
+                minTrackingConfidence: 0.3
+            });
+        }
+
+        // 優先嘗試 GPU，若行動端 WebGL 卡住則無縫切換 CPU
+        try {
+            [faceLandmarker, handLandmarker] = await Promise.all([
+                loadFaceModel("GPU"),
+                loadHandModel("GPU")
+            ]);
+            console.log("✅ MediaPipe GPU 模式載入完成！");
+        } catch (gpuErr) {
+            console.warn("⚠️ GPU 模式不支援，自動切換至 CPU 高相容模式:", gpuErr);
+            loadingText.textContent = "正在以 CPU 相容模式載入模型...";
+            [faceLandmarker, handLandmarker] = await Promise.all([
+                loadFaceModel("CPU"),
+                loadHandModel("CPU")
+            ]);
+            console.log("✅ MediaPipe CPU 模式載入完成！");
+        }
+
+        clearTimeout(safetyTimer);
         loadingOverlay.classList.add("hidden");
-        console.log("✅ MediaPipe 模型載入完成！");
+        console.log("✅ 監測系統準備就緒！");
     } catch (err) {
+        clearTimeout(safetyTimer);
         console.error("❌ 模型載入失敗:", err);
-        loadingText.innerHTML = `⚠️ 模型載入失敗: ${err.message}<br><small>請檢查網路連線或使用 HTTPS</small>`;
+        loadingText.innerHTML = `⚠️ 模型載入受阻: ${err.message}<br><button class="btn btn-primary" style="margin-top:12px;" onclick="loadingOverlay.classList.add('hidden')">跳過並直接進入</button>`;
     }
 }
 
