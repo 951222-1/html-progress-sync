@@ -1,0 +1,157 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>🛡️ 防哽咽即時監測系統 (手機 Web 版)</title>
+    <link rel="stylesheet" href="style.css">
+    <!-- Google Fonts -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <!-- 頂部導航與狀態 -->
+        <header class="app-header">
+            <div class="header-left">
+                <span class="logo-icon">🛡️</span>
+                <span class="app-title">防哽咽監測 <small>Web AI</small></span>
+            </div>
+            <div class="header-right">
+                <span id="fpsBadge" class="badge">FPS: --</span>
+                <button id="btnSettings" class="icon-btn" title="設定">⚙️</button>
+            </div>
+        </header>
+
+        <!-- 緊急全螢幕警報橫幅 (預設隱藏) -->
+        <div id="alertBanner" class="alert-banner hidden">
+            <div class="alert-content">
+                <span class="alert-icon">🚨</span>
+                <div class="alert-text-group">
+                    <div id="alertTitle" class="alert-title">窒息警報 (L3)</div>
+                    <div id="alertDesc" class="alert-desc">偵測到手抓喉嚨窒息手勢！請立即施救！</div>
+                </div>
+            </div>
+            <button id="btnDismissAlert" class="btn-dismiss">解除警報</button>
+        </div>
+
+        <!-- 視訊與畫布容器 -->
+        <div class="viewport-wrapper">
+            <video id="webcam" playsinline webkit-playsinline autoplay muted></video>
+            <canvas id="outputCanvas"></canvas>
+
+            <!-- 載入中遮罩 -->
+            <div id="loadingOverlay" class="loading-overlay">
+                <div class="spinner"></div>
+                <div id="loadingText" class="loading-text">正在載入 MediaPipe AI 模型...</div>
+                <div class="loading-subtext">首次載入可能需數秒，請稍候</div>
+            </div>
+
+            <!-- HUD 浮層資訊 -->
+            <div class="hud-overlay">
+                <div class="hud-card">
+                    <div class="hud-row">
+                        <span class="hud-label">當前狀態</span>
+                        <span id="hudState" class="hud-val state-idle">待機 (IDLE)</span>
+                    </div>
+                    <div class="hud-row">
+                        <span class="hud-label">嘴巴開合 (MAR)</span>
+                        <span id="hudMAR" class="hud-val">0.00</span>
+                    </div>
+                    <div class="hud-row">
+                        <span class="hud-label">咀嚼次數</span>
+                        <span id="hudChewCount" class="hud-val">0 次</span>
+                    </div>
+                    <div class="hud-row">
+                        <span class="hud-label">聲學嗆咳指數</span>
+                        <div class="audio-bar-wrapper">
+                            <div id="audioBar" class="audio-bar"></div>
+                        </div>
+                        <span id="hudAudioScore" class="hud-val-audio">0.00</span>
+                    </div>
+                </div>
+
+                <!-- 抓喉手勢提示標籤 -->
+                <div id="gestureNotice" class="gesture-badge hidden">
+                    🖐️ 抓喉異樣確認中：<span id="gestureHoldCount">0.0</span>s / <span id="gestureTargetSec">8.0</span>s
+                </div>
+
+                <!-- 咳嗽即時警示標籤 (需跑足秒數) -->
+                <div id="coughNotice" class="cough-badge hidden">
+                    🗣️ 咳嗽異樣確認中：<span id="coughHoldCount">0.0</span>s / <span id="coughTargetSec">8.0</span>s
+                </div>
+
+                <!-- 無聲窒息警示標籤 -->
+                <div id="silentNotice" class="silent-badge hidden">
+                    🤐 無聲異樣確認中：<span id="silentHoldCount">0.0</span>s / <span id="silentTargetSec">8.0</span>s
+                </div>
+            </div>
+        </div>
+
+        <!-- 底部快速操作面板 -->
+        <footer class="app-footer">
+            <button id="btnStart" class="btn btn-primary">
+                <span class="btn-icon">▶</span> 啟動監測
+            </button>
+            <button id="btnFlipCam" class="btn btn-secondary" title="切換鏡頭">
+                <span class="btn-icon">🔄</span> 切換鏡頭
+            </button>
+            <button id="btnMuteSound" class="btn btn-secondary" title="警報音效開關">
+                <span class="btn-icon" id="soundIcon">🔔</span> 警報聲
+            </button>
+        </footer>
+    </div>
+
+    <!-- 設定對話框 Modal -->
+    <div id="settingsModal" class="modal hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3>⚙️ 監測參數與警報設定</h3>
+                <button id="btnCloseModal" class="close-btn">&times;</button>
+            </div>
+            <div class="modal-body">
+                <div class="form-group">
+                    <label>個案名稱：</label>
+                    <input type="text" id="patientName" value="長者 A" class="form-input">
+                </div>
+                <div class="form-group">
+                    <label>LINE Notify 權杖 (Token)：</label>
+                    <input type="password" id="lineToken" placeholder="若需 LINE 推播請填入 Token" class="form-input">
+                    <small>可於 LINE Notify 官網免費申請發送警報至照顧者群組</small>
+                </div>
+                <div class="form-group">
+                    <label>異樣需持續確認時間 (跑足秒數才警報)：<span id="valGestureHold">8.0</span>s</label>
+                    <input type="range" id="gestureHoldSec" min="1.0" max="15.0" step="0.5" value="8.0" class="form-slider">
+                </div>
+                <div class="form-group">
+                    <label>喉嚨感應圈半徑 (倍數)：<span id="valThroatRatio">0.75</span></label>
+                    <input type="range" id="throatRatio" min="0.4" max="1.1" step="0.05" value="0.75" class="form-slider">
+                </div>
+                <div class="form-group">
+                    <label>咀嚼超時預警門檻 (秒)：<span id="valChewTimeout">8.0</span>s</label>
+                    <input type="range" id="chewTimeout" min="3.0" max="15.0" step="0.5" value="8.0" class="form-slider">
+                </div>
+                <div class="form-group">
+                    <label>嗆咳聲音門檻 (調適中，越小越靈敏)：<span id="valCoughTh">0.22</span></label>
+                    <input type="range" id="coughThreshold" min="0.05" max="0.50" step="0.01" value="0.22" class="form-slider">
+                </div>
+                <div class="form-group-checkbox">
+                    <input type="checkbox" id="chkHandSkeleton" checked>
+                    <label for="chkHandSkeleton">顯示手部 21 關鍵點骨架</label>
+                </div>
+                <div class="form-group-checkbox">
+                    <input type="checkbox" id="chkVibrate" checked>
+                    <label for="chkVibrate">手機警報時啟用震動</label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="btnSaveSettings" class="btn btn-primary">儲存設定</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MediaPipe Tasks Vision CDN -->
+    <script type="module" src="app.js"></script>
+</body>
+</html>
