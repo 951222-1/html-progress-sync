@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>#0007 防哽咽即時監測系統 —— 哽噎嚴格判定重構、嗆咳靜默後台化與相機端 UI 升級報告</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; line-height: 1.6; max-width: 960px; margin: 30px auto; padding: 20px; color: #0f172a; background-color: #f8fafc; }
+        h1 { color: #1e3a8a; border-bottom: 3px solid #3b82f6; padding-bottom: 12px; font-size: 1.85rem; }
+        h2 { color: #1e40af; margin-top: 28px; border-bottom: 1px solid #cbd5e1; padding-bottom: 6px; font-size: 1.35rem; }
+        .meta-box { background: #ffffff; border: 1px solid #e2e8f0; padding: 20px; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; font-size: 0.95em; }
+        .badge { background: #10b981; color: white; padding: 4px 12px; border-radius: 6px; font-weight: bold; font-size: 0.85em; display: inline-block; }
+        .card { background: #ffffff; border: 1px solid #e2e8f0; padding: 18px; border-radius: 10px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+        code { background: #f1f5f9; color: #0f172a; padding: 2px 6px; border-radius: 4px; font-family: "JetBrains Mono", Consolas, monospace; font-size: 0.9em; }
+        table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 0.92em; }
+        th, td { border: 1px solid #cbd5e1; padding: 10px 14px; text-align: left; }
+        th { background-color: #f1f5f9; color: #1e293b; font-weight: 700; }
+        ul { padding-left: 22px; }
+        li { margin-bottom: 8px; }
+        .alert-l4 { background-color: #fef2f2; border-left: 5px solid #ef4444; padding: 12px 16px; margin-bottom: 12px; border-radius: 4px; }
+        .alert-info { background-color: #eff6ff; border-left: 5px solid #3b82f6; padding: 12px 16px; margin-bottom: 12px; border-radius: 4px; }
+        .tag-pill { background: #e0e7ff; color: #3730a3; padding: 2px 8px; border-radius: 12px; font-size: 0.82em; font-weight: 600; }
+        .tag-danger { background: #fee2e2; color: #991b1b; padding: 2px 8px; border-radius: 12px; font-size: 0.82em; font-weight: 600; }
+        .tag-success { background: #dcfce7; color: #166534; padding: 2px 8px; border-radius: 12px; font-size: 0.82em; font-weight: 600; }
+    </style>
+</head>
+<body>
+
+    <h1>🛡️ 防哽咽即時監測系統 —— 哽噎嚴格判定重構、嗆咳靜默後台化與 UI 升級報告 (#0007)</h1>
+    
+    <div class="meta-box">
+        <div class="meta-grid">
+            <div><strong>檔案序號 (ID)：</strong> <code>0007</code></div>
+            <div><strong>任務標題：</strong> 哽噎 L4 晃動嚴格判定、嗆咳靜默紀錄、新增個案與 UI 清爽化</div>
+            <div><strong>執行 AI：</strong> Antigravity AI Agent</div>
+            <div><strong>任務狀態：</strong> <span class="badge">COMPLETED</span></div>
+            <div><strong>發布時間：</strong> 2026-09-09T14:45:00Z</div>
+            <div><strong>涵蓋端點：</strong> 手機 Web 端 (GitHub Pages) + 桌面 Python 端 (OpenCV/MediaPipe)</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>🚨 一、哽噎緊急警報（L4）過敏誤報問題根治與嚴格判定</h2>
+        <div class="alert-l4">
+            <strong>核心準則：</strong>「手放到胸口和脖子不代表哽噎，必須放上去後身體持續前後左右劇烈晃動，才觸發警報。」
+        </div>
+        <div class="card">
+            <h3>1. 誤報根因剖析與移除機制</h3>
+            <ul>
+                <li><strong>移除無聲窒息（Silent Choke）旁路：</strong> 過去演算法在嘴巴微張且靜止持續數秒時會直接判定窒息並觸發全螢幕警報，已徹底停用此觸發途徑。</li>
+                <li><strong>移除多模態證據融合（Evidence Fusion）過度累計：</strong> 過去手摸脖子即給予 0.6 分權重，加上背景噪音即可直接滿分觸發 L4，現已完全移除直接觸發警報邏輯。</li>
+                <li><strong>移除單純撫頸滿 5 秒警報：</strong> 長者抓癢或觸碰脖子不再會引發緊急警報。</li>
+            </ul>
+
+            <h3>2. 唯一高特異性判定決策邏輯</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>必要條件</th>
+                        <th>量化判定指標</th>
+                        <th>執行狀態</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>條件一：身體前後左右劇烈搖晃</strong></td>
+                        <td>鼻子水平/垂直位移 &ge; 22% 頭長，位移步幅 &gt; 3.0 px，且具有 &ge; 2 次反向換向震盪（排除單純低頭或點頭）。</td>
+                        <td><span class="tag-danger">必須具備</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>條件二：手部撫胸／拍胸／握喉</strong></td>
+                        <td>手部關鍵點落入以頸部/胸口為中心的核心危險半徑內（至少 2 個手部關鍵點進駐）。</td>
+                        <td><span class="tag-danger">必須具備</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>條件三：雙重動作持續時間滿 5.0 秒</strong></td>
+                        <td>上述兩動作<strong>同時保持</strong>累計滿 5.0 秒。身體搖晃中斷或手移開，計時立即重置為 0。</td>
+                        <td><span class="tag-success">雙重嚴格鎖定</span></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>📋 二、L1 / L2 嗆咳事件後台靜默紀錄化</h2>
+        <div class="card">
+            <ul>
+                <li><strong>移除阻斷式警報：</strong> 偵測到咳嗽（聲音特徵或頭部急速抽動）時，不再彈出全螢幕阻斷對話框，不再閃爍紅色危險橫幅。</li>
+                <li><strong>靜默紀錄資料庫：</strong> 背景自動寫入 SQLite 資料庫與 LocalStorage，標籤為 <code>嗆咳紀錄</code>，供照護團隊事後進行吞嚥困難評估。</li>
+                <li><strong>移除發呆警報：</strong> 徹底停用 4 秒未吞嚥發呆警報，尊重長者自主進食節奏，避免用餐壓力。</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>📱 三、被照護者相機端 UI 升級與介面簡化</h2>
+        <div class="card">
+            <ul>
+                <li><strong>新增個案基本資料功能：</strong> 點擊進入系統時，提供「➕ 新增個案」介面，照護者可填寫「姓名（稱呼）」與「性別」，自動生成個案代號並即刻登入。</li>
+                <li><strong>獨立嗆咳紀錄檢視視窗：</strong> 頂端新增「📋 嗆咳紀錄」按鈕與次數計數徽章，點擊彈出歷史嗆咳列表，可檢視發生時間、類型與明細，並支援清空重置。</li>
+                <li><strong>畫面清爽化：</strong> 隱藏技術 HUD 數據面板，長者端相機畫面簡約乾淨，僅保留清晰引導與必要狀態指示。</li>
+                <li><strong>修復個案選擇錯誤：</strong> 修復 <code>loginAsPatient is not defined</code> 函式全域引用問題，確保首頁選單可順暢切換不同被照護者。</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>🌐 四、雙端同步發布狀態</h2>
+        <div class="card">
+            <table>
+                <thead>
+                    <tr>
+                        <th>部署標的</th>
+                        <th>檔案位置 / 網址</th>
+                        <th>更新狀態</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>手機 Web 相機端</strong></td>
+                        <td><a href="https://951222-1.github.io/html-progress-sync/mobile/index.html" target="_blank">https://951222-1.github.io/html-progress-sync/mobile/index.html</a></td>
+                        <td><span class="badge">已同步發布</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>照護者儀表板</strong></td>
+                        <td><a href="https://951222-1.github.io/html-progress-sync/mobile/caregiver.html" target="_blank">https://951222-1.github.io/html-progress-sync/mobile/caregiver.html</a></td>
+                        <td><span class="badge">已同步發布</span></td>
+                    </tr>
+                    <tr>
+                        <td><strong>桌面 Python 版</strong></td>
+                        <td><code>桌面版_學生註解/防哽咽裝置4_2.py</code></td>
+                        <td><span class="badge">邏輯已同步</span></td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+</body>
+</html>
