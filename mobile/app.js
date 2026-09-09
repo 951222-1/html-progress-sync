@@ -874,8 +874,13 @@ async function processVideoFrame(now) {
             handOnNeckStartTime = null;
             handOnNeckDuration = 0.0;
         }
-    } else if (visionCough && audioEnergy > 0.25) {
-        triggerAlertLevel('L4', '🚨【雙重確認嗆咳警報】影像與聲音同時偵測到強烈急劇嗆咳！');
+    } else if (visionCough || audioEnergy > 0.25) {
+        // L1 / L2 合併為「嗆咳」 (靜默後台紀錄：取消劇烈晃動強制綁定，不跳 UI 彈窗、不閃紅橫幅)
+        if (currentTime - (window._lastCoughLogTime || 0) >= 3.0) {
+            window._lastCoughLogTime = currentTime;
+            mealMetrics.coughCount = (mealMetrics.coughCount || 0) + 1;
+            console.log("🤫【靜默後台紀錄】偵測到嗆咳（聲音咳嗽或影像頭部抽動），背景靜默紀錄，無彈窗、不閃紅橫幅。");
+        }
     }
 
     // 更新 HUD 即時資訊
