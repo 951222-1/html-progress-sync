@@ -1,157 +1,172 @@
 <!DOCTYPE html>
-<html lang="zh-TW">
+<html lang="zh-TW" class="dark">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>🛡️ 防哽咽即時監測系統 (手機 Web 版)</title>
-    <link rel="stylesheet" href="style.css">
-    <!-- Google Fonts -->
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+TC:wght@400;500;700;900&family=JetBrains+Mono:wght@500;700&display=swap" rel="stylesheet">
-</head>
-<body>
-    <div class="app-container">
-        <!-- 頂部導航與狀態 -->
-        <header class="app-header">
-            <div class="header-left">
-                <span class="logo-icon">🛡️</span>
-                <span class="app-title">防哽咽監測 <small>Web AI</small></span>
-            </div>
-            <div class="header-right">
-                <span id="fpsBadge" class="badge">FPS: --</span>
-                <button id="btnSettings" class="icon-btn" title="設定">⚙️</button>
-            </div>
-        </header>
-
-        <!-- 緊急全螢幕警報橫幅 (預設隱藏) -->
-        <div id="alertBanner" class="alert-banner hidden">
-            <div class="alert-content">
-                <span class="alert-icon">🚨</span>
-                <div class="alert-text-group">
-                    <div id="alertTitle" class="alert-title">窒息警報 (L3)</div>
-                    <div id="alertDesc" class="alert-desc">偵測到手抓喉嚨窒息手勢！請立即施救！</div>
-                </div>
-            </div>
-            <button id="btnDismissAlert" class="btn-dismiss">解除警報</button>
-        </div>
-
-        <!-- 視訊與畫布容器 -->
-        <div class="viewport-wrapper">
-            <video id="webcam" playsinline webkit-playsinline autoplay muted></video>
-            <canvas id="outputCanvas"></canvas>
-
-            <!-- 載入中遮罩 -->
-            <div id="loadingOverlay" class="loading-overlay">
-                <div class="spinner"></div>
-                <div id="loadingText" class="loading-text">正在載入 MediaPipe AI 模型...</div>
-                <div class="loading-subtext">首次載入可能需數秒，請稍候</div>
-            </div>
-
-            <!-- HUD 浮層資訊 -->
-            <div class="hud-overlay">
-                <div class="hud-card">
-                    <div class="hud-row">
-                        <span class="hud-label">當前狀態</span>
-                        <span id="hudState" class="hud-val state-idle">待機 (IDLE)</span>
-                    </div>
-                    <div class="hud-row">
-                        <span class="hud-label">嘴巴開合 (MAR)</span>
-                        <span id="hudMAR" class="hud-val">0.00</span>
-                    </div>
-                    <div class="hud-row">
-                        <span class="hud-label">咀嚼次數</span>
-                        <span id="hudChewCount" class="hud-val">0 次</span>
-                    </div>
-                    <div class="hud-row">
-                        <span class="hud-label">聲學嗆咳指數</span>
-                        <div class="audio-bar-wrapper">
-                            <div id="audioBar" class="audio-bar"></div>
-                        </div>
-                        <span id="hudAudioScore" class="hud-val-audio">0.00</span>
-                    </div>
-                </div>
-
-                <!-- 抓喉手勢提示標籤 -->
-                <div id="gestureNotice" class="gesture-badge hidden">
-                    🖐️ 抓喉異樣確認中：<span id="gestureHoldCount">0.0</span>s / <span id="gestureTargetSec">8.0</span>s
-                </div>
-
-                <!-- 咳嗽即時警示標籤 (需跑足秒數) -->
-                <div id="coughNotice" class="cough-badge hidden">
-                    🗣️ 咳嗽異樣確認中：<span id="coughHoldCount">0.0</span>s / <span id="coughTargetSec">8.0</span>s
-                </div>
-
-                <!-- 無聲窒息警示標籤 -->
-                <div id="silentNotice" class="silent-badge hidden">
-                    🤐 無聲異樣確認中：<span id="silentHoldCount">0.0</span>s / <span id="silentTargetSec">8.0</span>s
-                </div>
-            </div>
-        </div>
-
-        <!-- 底部快速操作面板 -->
-        <footer class="app-footer">
-            <button id="btnStart" class="btn btn-primary">
-                <span class="btn-icon">▶</span> 啟動監測
-            </button>
-            <button id="btnFlipCam" class="btn btn-secondary" title="切換鏡頭">
-                <span class="btn-icon">🔄</span> 切換鏡頭
-            </button>
-            <button id="btnMuteSound" class="btn btn-secondary" title="警報音效開關">
-                <span class="btn-icon" id="soundIcon">🔔</span> 警報聲
-            </button>
-        </footer>
-    </div>
-
-    <!-- 設定對話框 Modal -->
-    <div id="settingsModal" class="modal hidden">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h3>⚙️ 監測參數與警報設定</h3>
-                <button id="btnCloseModal" class="close-btn">&times;</button>
-            </div>
-            <div class="modal-body">
-                <div class="form-group">
-                    <label>個案名稱：</label>
-                    <input type="text" id="patientName" value="長者 A" class="form-input">
-                </div>
-                <div class="form-group">
-                    <label>LINE Notify 權杖 (Token)：</label>
-                    <input type="password" id="lineToken" placeholder="若需 LINE 推播請填入 Token" class="form-input">
-                    <small>可於 LINE Notify 官網免費申請發送警報至照顧者群組</small>
-                </div>
-                <div class="form-group">
-                    <label>異樣需持續確認時間 (跑足秒數才警報)：<span id="valGestureHold">8.0</span>s</label>
-                    <input type="range" id="gestureHoldSec" min="1.0" max="15.0" step="0.5" value="8.0" class="form-slider">
-                </div>
-                <div class="form-group">
-                    <label>喉嚨感應圈半徑 (倍數)：<span id="valThroatRatio">0.75</span></label>
-                    <input type="range" id="throatRatio" min="0.4" max="1.1" step="0.05" value="0.75" class="form-slider">
-                </div>
-                <div class="form-group">
-                    <label>咀嚼超時預警門檻 (秒)：<span id="valChewTimeout">8.0</span>s</label>
-                    <input type="range" id="chewTimeout" min="3.0" max="15.0" step="0.5" value="8.0" class="form-slider">
-                </div>
-                <div class="form-group">
-                    <label>嗆咳聲音門檻 (調適中，越小越靈敏)：<span id="valCoughTh">0.22</span></label>
-                    <input type="range" id="coughThreshold" min="0.05" max="0.50" step="0.01" value="0.22" class="form-slider">
-                </div>
-                <div class="form-group-checkbox">
-                    <input type="checkbox" id="chkHandSkeleton" checked>
-                    <label for="chkHandSkeleton">顯示手部 21 關鍵點骨架</label>
-                </div>
-                <div class="form-group-checkbox">
-                    <input type="checkbox" id="chkVibrate" checked>
-                    <label for="chkVibrate">手機警報時啟用震動</label>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button id="btnSaveSettings" class="btn btn-primary">儲存設定</button>
-            </div>
-        </div>
-    </div>
-
+    <title>防哽咽 AI 即時監測 —— 被照護者相機端</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Supabase JS Client -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <!-- MediaPipe Tasks Vision CDN -->
-    <script type="module" src="app.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm/vision_bundle.js" crossorigin="anonymous"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col justify-between select-none">
+
+    <!-- 頂部 Header 導覽條 -->
+    <header class="bg-slate-900/90 backdrop-blur border-b border-slate-800 px-4 py-3 flex items-center justify-between sticky top-0 z-40">
+        <div class="flex items-center space-x-2">
+            <span class="text-2xl">🛡️</span>
+            <div>
+                <h1 class="font-bold text-base text-blue-400 leading-tight">防哽咽 AI 即時監測</h1>
+                <p class="text-[11px] text-slate-400" id="current-patient-label">未登入個案</p>
+            </div>
+        </div>
+        <div class="flex items-center space-x-2">
+            <button id="btn-login-modal" onclick="openLoginModal()" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1.5 rounded-lg border border-slate-700 transition">
+                🔑 身分切換
+            </button>
+            <a href="caregiver.html" target="_blank" class="text-xs bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 border border-blue-500/40 px-2.5 py-1.5 rounded-lg font-semibold transition">
+                🖥️ 照護儀表板
+            </a>
+        </div>
+    </header>
+
+    <!-- 主要相機與 AI 監測內容區 -->
+    <main class="flex-1 max-w-md w-full mx-auto p-4 flex flex-col justify-center space-y-4">
+
+        <!-- 質地選擇卡片 -->
+        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-3 shadow-lg">
+            <label class="text-xs font-semibold text-slate-400 block mb-2">🍽️ 請選擇本次用餐質地：</label>
+            <div class="grid grid-cols-3 gap-2">
+                <button onclick="selectDiet('regular')" id="btn-diet-regular" class="diet-btn bg-blue-600 text-white font-bold py-2 rounded-xl text-xs shadow border border-blue-400 transition">
+                    普通餐食<br><span class="text-[10px] opacity-80">(需咬10-20下)</span>
+                </button>
+                <button onclick="selectDiet('soft')" id="btn-diet-soft" class="diet-btn bg-slate-800 text-slate-300 font-semibold py-2 rounded-xl text-xs hover:bg-slate-700 border border-slate-700 transition">
+                    軟食餐盒<br><span class="text-[10px] opacity-80">(需咬16-18下)</span>
+                </button>
+                <button onclick="selectDiet('pureed')" id="btn-diet-pureed" class="diet-btn bg-slate-800 text-slate-300 font-semibold py-2 rounded-xl text-xs hover:bg-slate-700 border border-slate-700 transition">
+                    碎食餐<br><span class="text-[10px] opacity-80">(需咬3-10下)</span>
+                </button>
+            </div>
+        </div>
+
+        <!-- AI 相機 Viewport 與 Canvas 繪圖面板 -->
+        <div class="relative w-full aspect-[4/3] bg-black rounded-2xl overflow-hidden border-2 border-slate-800 shadow-2xl">
+            <!-- 隱藏式 Video 標籤用於擷取 WebCam -->
+            <video id="webcam-video" class="hidden" playsinline muted></video>
+            
+            <!-- Canvas 用於繪製即時骨架、粉紅喉嚨圈與下巴波形 -->
+            <canvas id="ai-canvas" class="w-full h-full object-cover"></canvas>
+
+            <!-- 實時狀態 HUD Overlay -->
+            <div class="absolute top-3 left-3 bg-slate-900/80 backdrop-blur px-3 py-1.5 rounded-xl border border-slate-700/60 text-[11px] space-y-0.5">
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">當前質地:</span>
+                    <span id="hud-diet" class="font-bold text-blue-300">普通餐食</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">累積咀嚼:</span>
+                    <span id="hud-chews" class="font-mono font-bold text-emerald-400 text-sm">0 次</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">成功吞嚥:</span>
+                    <span id="hud-swallows" class="font-mono font-bold text-blue-400 text-sm">0 次</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">下巴速度:</span>
+                    <span id="hud-jaw-vel" class="font-mono text-slate-200">0.00</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">嘴唇藍光比:</span>
+                    <span id="hud-cyanosis" class="font-mono text-emerald-400 font-bold">0.25 (正常)</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">證據融合分:</span>
+                    <span id="hud-fusion-score" class="font-mono text-blue-300 font-bold">0.00 / 1.0</span>
+                </div>
+            </div>
+
+            <!-- 畫面中央底部 動態動作狀態 Pill -->
+            <div class="absolute bottom-3 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur px-4 py-1.5 rounded-full border border-slate-700/80 shadow-lg flex items-center space-x-2 z-20">
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" id="hud-action-dot"></span>
+                <span id="hud-action-state" class="font-bold text-xs text-slate-200">👄 準備用餐中...</span>
+            </div>
+
+            <!-- 右上角 聲音波形 HUD -->
+            <div class="absolute top-3 right-3 bg-slate-900/80 backdrop-blur px-2.5 py-1.5 rounded-xl border border-slate-700/60 flex items-center space-x-2">
+                <span class="text-[10px] text-slate-400">🎤 聲音</span>
+                <div class="w-12 h-2 bg-slate-800 rounded-full overflow-hidden">
+                    <div id="hud-mic-bar" class="h-full bg-blue-500 w-0 transition-all duration-75"></div>
+                </div>
+            </div>
+
+            <!-- 警報跳窗圖層 (Level 1 - Level 4) -->
+            <div id="alert-overlay" class="absolute inset-0 hidden flex flex-col items-center justify-center bg-rose-600/90 backdrop-blur-md p-6 text-center z-30 animate-pulse">
+                <span class="text-6xl mb-2 animate-bounce">🚨</span>
+                <h2 id="alert-title" class="text-2xl font-black text-white tracking-wider mb-2">L4 急劇嗆咳爆發警報</h2>
+                <p id="alert-desc" class="text-sm text-rose-100 mb-6">偵測到下巴劇烈痙攣與聲音能量爆發，已即時通知遠端照護員！</p>
+                <button onclick="dismissAlertOverlay()" class="bg-white text-rose-900 font-bold px-6 py-2.5 rounded-xl shadow-lg hover:bg-slate-100 transition">
+                    解除警報 ✕
+                </button>
+            </div>
+        </div>
+
+        <!-- 開始 / 結束 用餐按鈕列 -->
+        <div class="grid grid-cols-2 gap-3">
+            <button id="btn-start-meal" onclick="startMealSession()" class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-2xl shadow-lg flex items-center justify-center space-x-2 text-base transition border border-emerald-400">
+                <span>🍽️</span>
+                <span>開始用餐</span>
+            </button>
+            <button id="btn-end-meal" onclick="endMealSession()" disabled class="bg-slate-800 text-slate-500 font-bold py-3.5 rounded-2xl shadow flex items-center justify-center space-x-2 text-base cursor-not-allowed border border-slate-700 transition">
+                <span>⏹️</span>
+                <span>結束用餐</span>
+            </button>
+        </div>
+
+    </main>
+
+    <!-- 底部個案即時評分卡片 -->
+    <footer class="bg-slate-900/90 border-t border-slate-800 p-3 max-w-md w-full mx-auto text-xs text-slate-400 flex items-center justify-between">
+        <div>
+            <span>用餐狀態: </span>
+            <span id="meal-status-text" class="font-bold text-slate-300">尚未開始</span>
+        </div>
+        <div>
+            <span>即時風險評級: </span>
+            <span id="risk-badge" class="font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">🟢 正常</span>
+        </div>
+    </footer>
+
+    <!-- 個案登入與 PIN 碼 Modal -->
+    <div id="login-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div class="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-xs w-full shadow-2xl space-y-4">
+            <div class="text-center">
+                <span class="text-4xl">🔑</span>
+                <h3 class="font-bold text-lg text-slate-100 mt-2">請選擇被照護者帳號</h3>
+                <p class="text-xs text-slate-400">載入該個案的個人化咀嚼與吞嚥平均值</p>
+            </div>
+            
+            <div class="space-y-2">
+                <button onclick="loginAsPatient('P001', '王爺爺 (軟食)')" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 p-3 rounded-2xl font-semibold text-left flex items-center justify-between border border-slate-700 transition">
+                    <span>👴 王爺爺 (P001)</span>
+                    <span class="text-xs text-blue-400">82歲 · 軟食</span>
+                </button>
+                <button onclick="loginAsPatient('P002', '陳奶奶 (碎食)')" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 p-3 rounded-2xl font-semibold text-left flex items-center justify-between border border-slate-700 transition">
+                    <span>👵 陳奶奶 (P002)</span>
+                    <span class="text-xs text-blue-400">78歲 · 碎食</span>
+                </button>
+                <button onclick="loginAsPatient('P003', '林伯伯 (普通餐)')" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-200 p-3 rounded-2xl font-semibold text-left flex items-center justify-between border border-slate-700 transition">
+                    <span>👨 林伯伯 (P003)</span>
+                    <span class="text-xs text-blue-400">85歲 · 普通餐</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- 腳本引用 -->
+    <script src="config.js"></script>
+    <script src="app.js"></script>
 </body>
 </html>
