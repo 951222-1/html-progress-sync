@@ -127,32 +127,59 @@ async function loginAsPatient(code, nameStr) {
 
 // 4. MediaPipe WebAssembly 初始化
 async function initMediaPipe() {
+    const loadingElem = document.getElementById('loading-overlay');
     try {
         const vision = await FilesetResolver.forVisionTasks(
             "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
         );
         
-        faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
-            baseOptions: {
-                modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
-                delegate: "GPU"
-            },
-            runningMode: "VIDEO",
-            numFaces: 1
-        });
+        try {
+            faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+                    delegate: "GPU"
+                },
+                runningMode: "VIDEO",
+                numFaces: 1
+            });
+        } catch (gpuErr) {
+            console.warn('[MediaPipe] GPU delegate failed, falling back to CPU:', gpuErr);
+            faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+                    delegate: "CPU"
+                },
+                runningMode: "VIDEO",
+                numFaces: 1
+            });
+        }
 
-        handLandmarker = await HandLandmarker.createFromOptions(vision, {
-            baseOptions: {
-                modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
-                delegate: "GPU"
-            },
-            runningMode: "VIDEO",
-            numHands: 2
-        });
+        try {
+            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                    delegate: "GPU"
+                },
+                runningMode: "VIDEO",
+                numHands: 2
+            });
+        } catch (gpuErr) {
+            console.warn('[MediaPipe] GPU delegate failed for hands, falling back to CPU:', gpuErr);
+            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+                baseOptions: {
+                    modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                    delegate: "CPU"
+                },
+                runningMode: "VIDEO",
+                numHands: 2
+            });
+        }
 
         console.log('[MediaPipe] Face & Hand Landmarkers initialized successfully.');
     } catch (e) {
-        console.error('[MediaPipe] Vision initialization failed:', e);
+        console.error('[MediaPipe] Vision initialization error:', e);
+    } finally {
+        if (loadingElem) loadingElem.classList.add('hidden');
     }
 }
 
