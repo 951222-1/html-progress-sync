@@ -129,12 +129,23 @@ async function loginAsPatient(code, nameStr) {
 async function initMediaPipe() {
     const loadingElem = document.getElementById('loading-overlay');
     try {
-        const vision = await FilesetResolver.forVisionTasks(
+        // 全域符號解析相容處理 (相容不同 CDN 匯出名稱)
+        const Resolver = window.FilesetResolver || (window.tasksVision && window.tasksVision.FilesetResolver);
+        const FaceL = window.FaceLandmarker || (window.tasksVision && window.tasksVision.FaceLandmarker);
+        const HandL = window.HandLandmarker || (window.tasksVision && window.tasksVision.HandLandmarker);
+
+        if (!Resolver || !FaceL || !HandL) {
+            console.warn('[MediaPipe] Tasks Vision global symbols not found on window. Running in fallback mode.');
+            if (loadingElem) loadingElem.classList.add('hidden');
+            return;
+        }
+
+        const vision = await Resolver.forVisionTasks(
             "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
         );
         
         try {
-            faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+            faceLandmarker = await FaceL.createFromOptions(vision, {
                 baseOptions: {
                     modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
                     delegate: "GPU"
@@ -144,7 +155,7 @@ async function initMediaPipe() {
             });
         } catch (gpuErr) {
             console.warn('[MediaPipe] GPU delegate failed, falling back to CPU:', gpuErr);
-            faceLandmarker = await FaceLandmarker.createFromOptions(vision, {
+            faceLandmarker = await FaceL.createFromOptions(vision, {
                 baseOptions: {
                     modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
                     delegate: "CPU"
@@ -155,7 +166,7 @@ async function initMediaPipe() {
         }
 
         try {
-            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+            handLandmarker = await HandL.createFromOptions(vision, {
                 baseOptions: {
                     modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
                     delegate: "GPU"
@@ -165,7 +176,7 @@ async function initMediaPipe() {
             });
         } catch (gpuErr) {
             console.warn('[MediaPipe] GPU delegate failed for hands, falling back to CPU:', gpuErr);
-            handLandmarker = await HandLandmarker.createFromOptions(vision, {
+            handLandmarker = await HandL.createFromOptions(vision, {
                 baseOptions: {
                     modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
                     delegate: "CPU"
