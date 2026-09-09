@@ -102,6 +102,16 @@ let lastAnchorTs = 0.0;
 const ANCHOR_GRACE_SEC = 2.0;
 const FACE_LOST_ALERT_SEC = 3.0;
 
+// 🎯 身體晃動與拍胸五秒哽噎判定狀態 (防止晃動過敏，嚴格要求同時持續5秒)
+let bodyMotionHistory = []; // { x, y, faceSize, time }
+let isBodyShakingContinuous = false;
+let isHandOnChest = false;
+let isHandOnChestOrThroat = false;
+let chokeSimultaneousStartTime = null;
+let chokeSimultaneousDuration = 0.0;
+let chokeGraceStartTime = null;
+const CHOKE_SIMULTANEOUS_TRIGGER_SEC = 5.0; // 必須同時持續滿 5 秒
+
 // AI 與媒體串流變數
 let webcamVideo = null;
 let aiCanvas = null;
@@ -670,29 +680,26 @@ async function processVideoFrame(now) {
         lastChin = { x: chin.x, y: chin.y };
         lastAnchorTs = currentTime;
 
-        // 獨立演算法 1: 手抓喉嚨手勢偵測 (handNearThroat)
-        isHandOnNeck = handNearThroat(handLandmarks, nose, chin, w, h, 0.6);
+        // 🎯 手抓喉嚨與胸口拍胸手勢偵測
+        const handCheck = handNearChestOrThroat(handLandmarks, nose, chin, w, h);
+        isHandOnNeck = handCheck.isThroat;
+        isHandOnChest = handCheck.isChest;
+        isHandOnChestOrThroat = handCheck.near;
 
-        // 影像嗆咳跡象 (連續 3 幀確認)
-        if (movementStd > 15.0 && Math.abs(mealMetrics.jawVelocity) > 8.0) {
+        // 影像嗆咳跡象 (提高門檻至連續 6 幀確認，過濾咀嚼干擾)
+        if (movementStd > 18.0 && Math.abs(mealMetrics.jawVelocity) > 10.0) {
             coughFrameCounter++;
         } else {
             coughFrameCounter = 0;
         }
-        if (coughFrameCounter >= 3) {
+        if (coughFrameCounter >= 6) {
             coughFrameCounter = 0;
             visionCough = true;
         }
 
-        // 身體無因次化劇烈晃動 (Scale-Invariant Shaking)
+        // 🎯 身體持續前後左右晃動分析 (嚴格過濾一般日常微幅晃動與進食咀嚼)
         const faceSize = Math.hypot((nose.x - chin.x) * w, (nose.y - chin.y) * h);
-        if (prevNose && faceSize > 0.001) {
-            const normDisp = Math.hypot((nose.x - prevNose.x) * w, (nose.y - prevNose.y) * h) / faceSize;
-            noseSpeedHistory.push(normDisp);
-            if (noseSpeedHistory.length > 30) noseSpeedHistory.shift();
-            const sumSpeed = noseSpeedHistory.reduce((a,b)=>a+b, 0);
-            if (sumSpeed > 1.5) bodyShaking = true;
-        }
+        isBodyShakingContinuous = checkContinuousBodyShaking(nose, faceSize, currentTime, w, h);
         prevNose = { x: nose.x, y: nose.y };
 
         // ------------------------------------------------------------------
@@ -786,8 +793,8 @@ async function processVideoFrame(now) {
             triggerAlertLevel('L4', '【緊急・多模態】綜合證據(聲音/手勢/嘴開靜止)達警戒，高度疑似窒息！');
         }
 
-        // 🎯 繪製原版 Detection Overlay (嘴部紅圈、關鍵特徵點、Throat Zone 紫色圈、大字提示)
-        drawOriginalDetectionOverlay(aiCtx, faceLandmarks, handLandmarks, w, h, currentState, mar, movementStd, mealMetrics.totalChews, isHandOnNeck);
+        // 🎯 繪製原版 Detection Overlay (嘴部紅圈、關鍵特徵點、Throat Zone 紫色圈、Chest Zone、大字提示)
+        drawOriginalDetectionOverlay(aiCtx, faceLandmarks, handLandmarks, w, h, currentState, mar, movementStd, mealMetrics.totalChews, isHandOnNeck, isHandOnChest, isBodyShakingContinuous, chokeSimultaneousDuration);
 
     } else {
         // 人臉遺失快取處理 (2.0 秒錨點快取手勢)
@@ -810,12 +817,48 @@ async function processVideoFrame(now) {
         }
 
         // 繪製 NO FACE DETECTED
-        drawOriginalDetectionOverlay(aiCtx, null, handLandmarks, w, h, currentState, 0, 0, mealMetrics.totalChews, isHandOnNeck);
+        drawOriginalDetectionOverlay(aiCtx, null, handLandmarks, w, h, currentState, 0, 0, mealMetrics.totalChews, isHandOnNeck, isHandOnChest, isBodyShakingContinuous, chokeSimultaneousDuration);
     }
 
     // ------------------------------------------------------------------
-    // 🚨 哽噎與嗆咳決策判斷樹 (Choke & Cough Decision Logic)
+    // 🚨 哽噎與拍胸晃動 5 秒決策邏輯 (核心規則：晃動 + 拍胸 同時持續 5 秒才觸發警報)
     // ------------------------------------------------------------------
+    const isSimultaneous = isBodyShakingContinuous && isHandOnChestOrThroat;
+
+    if (isSimultaneous) {
+        if (chokeSimultaneousStartTime === null) {
+            chokeSimultaneousStartTime = currentTime;
+        }
+        chokeGraceStartTime = null;
+        chokeSimultaneousDuration = currentTime - chokeSimultaneousStartTime;
+
+        // 🎯 兩者同時持續做滿 5 秒才觸發警報！(嚴格遵守使用者指示，防晃動過敏)
+        if (chokeSimultaneousDuration >= CHOKE_SIMULTANEOUS_TRIGGER_SEC) {
+            if (currentTime - lastChokeAlertTime >= 10.0) {
+                lastChokeAlertTime = currentTime;
+                triggerAlertLevel('L4', '🚨【緊急・劇烈哽噎警報】身體持續前後左右晃動且手部在胸口拍胸持續滿 5 秒！請立即協助！');
+                chokeSimultaneousStartTime = null;
+                chokeSimultaneousDuration = 0.0;
+            }
+        }
+    } else {
+        // 給予 0.6 秒短暫辨識抖動緩衝，若中斷超過 0.6 秒則歸零重計
+        if (chokeSimultaneousStartTime !== null) {
+            if (chokeGraceStartTime === null) {
+                chokeGraceStartTime = currentTime;
+            } else if (currentTime - chokeGraceStartTime > 0.6) {
+                chokeSimultaneousStartTime = null;
+                chokeSimultaneousDuration = 0.0;
+                chokeGraceStartTime = null;
+            }
+        }
+    }
+
+    // 輔助哽噎判斷：手抓握喉嚨持續 5 秒且伴隨咳嗽
+    let coughDetectedThisFrame = visionCough;
+    if (audioEnergy > 0.20) coughDetectedThisFrame = true;
+    if (coughDetectedThisFrame) lastCoughTime = currentTime;
+
     if (isHandOnNeck) {
         if (handOnNeckStartTime === null) handOnNeckStartTime = currentTime;
         handOnNeckDuration = currentTime - handOnNeckStartTime;
@@ -824,33 +867,19 @@ async function processVideoFrame(now) {
         handOnNeckDuration = 0.0;
     }
 
-    let coughDetectedThisFrame = visionCough;
-    if (audioEnergy > 0.15) coughDetectedThisFrame = true;
-    if (coughDetectedThisFrame) lastCoughTime = currentTime;
-
-    const chokeCondA = (handOnNeckDuration >= 5.0 && (currentTime - lastCoughTime <= 5.0));
-    const chokeCondB = (handOnNeckDuration >= 1.0 && bodyShaking);
-
-    if (chokeCondA || chokeCondB) {
+    if (handOnNeckDuration >= 5.0 && (currentTime - lastCoughTime <= 5.0)) {
         if (currentTime - lastChokeAlertTime >= 10.0) {
             lastChokeAlertTime = currentTime;
-            const gmsg = chokeCondB
-                ? '🚨【緊急・哽噎警報】手部抓握喉嚨且身體劇烈掙扎（前傾/左右掙扎），判定為哽噎！請立即前往協助！'
-                : '🚨【緊急・哽噎警報】手部抓握喉嚨持續 5 秒且伴隨咳嗽，判定為哽噎！請立即前往協助！';
-            triggerAlertLevel('L4', gmsg);
+            triggerAlertLevel('L4', '🚨【緊急・哽噎警報】手部抓握喉嚨持續 5 秒且伴隨咳嗽，判定為哽噎！請立即前往協助！');
             handOnNeckStartTime = null;
             handOnNeckDuration = 0.0;
         }
-    } else if (coughDetectedThisFrame && bodyShaking) {
-        triggerAlertLevel('L4', '🚨【緊急・劇烈嗆咳警報】偵測到嗆咳且身體劇烈晃動掙扎（前傾/左右掙扎）！');
-    } else if (visionCough && audioEnergy > 0.15) {
-        triggerAlertLevel('L4', '🚨【雙重確認嗆咳警報】影像+聲音同時偵測到嗆咳！');
-    } else if (visionCough) {
-        triggerAlertLevel('L3', '⚠️【嗆咳警報】影像偵測到劇烈晃動(影像嗆咳)，請留意狀況。');
+    } else if (visionCough && audioEnergy > 0.25) {
+        triggerAlertLevel('L4', '🚨【雙重確認嗆咳警報】影像與聲音同時偵測到強烈急劇嗆咳！');
     }
 
     // 更新 HUD 即時資訊
-    updateHudStats(currentState, mar, movementStd, mealMetrics.totalChews, mealMetrics.swallowCount || 0, mealMetrics.jawVelocity, evidenceFusion.score());
+    updateHudStats(currentState, mar, movementStd, mealMetrics.totalChews, mealMetrics.swallowCount || 0, mealMetrics.jawVelocity, evidenceFusion.score(), chokeSimultaneousDuration);
     
     // Level 1: 10秒 含飯發呆溫和提醒
     if (mealMetrics.jawStillTime >= CONFIG.BASELINES.POUCHING_HINT_SEC && mealMetrics.jawStillTime < (CONFIG.BASELINES.POUCHING_HINT_SEC + 0.5)) {
@@ -1091,29 +1120,134 @@ function broadcastSystemState() {
 // 獨立核心偵測演算法模組 (Ported from Standalone Detection Core Module)
 // =============================================================================
 
-// 1. 手抓喉嚨窒息手勢偵測 (Choke Gesture Detection - A1)
-function estimateThroat(nose, chin, extend = 0.6) {
+// 1. 手抓喉嚨與胸口拍胸手勢偵測 (Choke Gesture & Chest Patting Detection)
+function estimateThroat(nose, chin, extend = 0.5) {
     const tx = chin.x + extend * (chin.x - nose.x);
     const ty = chin.y + extend * (chin.y - nose.y);
     return { x: tx, y: ty };
 }
 
-function handNearThroat(hands, nose, chin, w, h, radiusScale = 0.6) {
-    if (!hands || hands.length === 0) return false;
-    const throat = estimateThroat(nose, chin);
+function estimateChest(nose, chin, extend = 1.35) {
+    const cx = chin.x + extend * (chin.x - nose.x);
+    const cy = chin.y + extend * (chin.y - nose.y);
+    return { x: cx, y: cy };
+}
+
+function handNearChestOrThroat(hands, nose, chin, w, h) {
+    if (!hands || hands.length === 0) {
+        return { near: false, isChest: false, isThroat: false, chestCenter: null, chestRadius: 0, throatCenter: null, throatRadius: 0 };
+    }
     const faceV = Math.hypot((chin.x - nose.x) * w, (chin.y - nose.y) * h);
-    const radius = Math.max(faceV * radiusScale, 1.0);
+    
+    // 喉嚨圈 (半徑約 0.55 倍臉長)
+    const throat = estimateThroat(nose, chin, 0.5);
+    const throatR = Math.max(faceV * 0.55, 15.0);
+    
+    // 胸口區域 (從下巴往下延伸 1.35 倍臉長，半徑 1.1 倍臉長，範圍寬廣涵蓋長者拍胸、捶胸動作)
+    const chest = estimateChest(nose, chin, 1.35);
+    const chestR = Math.max(faceV * 1.1, 35.0);
+
+    let isThroat = false;
+    let isChest = false;
 
     for (const hand of hands) {
         for (const pt of hand) {
-            const dist = Math.hypot((pt.x - throat.x) * w, (pt.y - throat.y) * h);
-            if (dist < radius) return true;
+            const px = pt.x * w;
+            const py = pt.y * h;
+            
+            const distThroat = Math.hypot(px - throat.x * w, py - throat.y * h);
+            if (distThroat < throatR) isThroat = true;
+
+            const distChest = Math.hypot(px - chest.x * w, py - chest.y * h);
+            if (distChest < chestR) isChest = true;
         }
     }
-    return false;
+    return {
+        near: (isThroat || isChest),
+        isChest: isChest,
+        isThroat: isThroat,
+        chestCenter: { x: chest.x * w, y: chest.y * h },
+        chestRadius: chestR,
+        throatCenter: { x: throat.x * w, y: throat.y * h },
+        throatRadius: throatR
+    };
 }
 
-// 2. 嘴部開合角度 (MAR) & 身體劇烈晃動無因次化計算
+// 2. 身體持續前後左右晃動分析 (嚴格過濾日常微小擺動、咀嚼與正常進食姿態)
+function checkContinuousBodyShaking(nose, faceSize, currentTime, w, h) {
+    if (!nose || faceSize <= 0) return false;
+
+    bodyMotionHistory.push({
+        x: nose.x,
+        y: nose.y,
+        faceSize: faceSize,
+        time: currentTime
+    });
+
+    // 保留最近 1.2 秒內的軌跡 (大約 30-36 幀)
+    while (bodyMotionHistory.length > 0 && (currentTime - bodyMotionHistory[0].time > 1.2)) {
+        bodyMotionHistory.shift();
+    }
+
+    if (bodyMotionHistory.length < 10) {
+        return false;
+    }
+
+    let minX = 1e9, maxX = -1e9;
+    let minY = 1e9, maxY = -1e9;
+    let minSize = 1e9, maxSize = -1e9;
+    let totalSpeed = 0.0;
+    let xDirectionReversals = 0;
+    let yDirectionReversals = 0;
+    let prevDx = 0;
+    let prevDy = 0;
+
+    for (let i = 0; i < bodyMotionHistory.length; i++) {
+        const p = bodyMotionHistory[i];
+        if (p.x < minX) minX = p.x;
+        if (p.x > maxX) maxX = p.x;
+        if (p.y < minY) minY = p.y;
+        if (p.y > maxY) maxY = p.y;
+        if (p.faceSize < minSize) minSize = p.faceSize;
+        if (p.faceSize > maxSize) maxSize = p.faceSize;
+
+        if (i > 0) {
+            const prev = bodyMotionHistory[i - 1];
+            const dx = (p.x - prev.x) * w;
+            const dy = (p.y - prev.y) * h;
+            const stepSpeed = Math.hypot(dx, dy) / p.faceSize;
+            totalSpeed += stepSpeed;
+
+            if (i > 1) {
+                if (dx * prevDx < 0 && Math.abs(dx) > 1.5) xDirectionReversals++;
+                if (dy * prevDy < 0 && Math.abs(dy) > 1.5) yDirectionReversals++;
+            }
+            prevDx = dx;
+            prevDy = dy;
+        }
+    }
+
+    const xSpan = (maxX - minX) * w / faceSize;
+    const ySpan = (maxY - minY) * h / faceSize;
+    const sizeSpan = (maxSize - minSize) / faceSize;
+
+    // 判定前後左右劇烈持續晃動：
+    // - 左右橫向擺動幅度 > 0.16 (橫向大幅擺動) 或 前後/俯仰幅度 > 0.16 或 臉距大小縮放 > 0.15
+    // - 且在 1.2 秒內累積速度 > 2.0 (排除靜止慢速轉頭)
+    // - 且有至少 2 次方向反轉 (證明為來回擺動/晃動，非單純側頭)
+    const hasDirectionReversal = (xDirectionReversals >= 2 || yDirectionReversals >= 2);
+    const hasSignificantSpan = (xSpan > 0.16 || ySpan > 0.16 || sizeSpan > 0.15);
+    const hasSustainedSpeed = (totalSpeed > 2.0);
+
+    return (hasSignificantSpan && hasSustainedSpeed && hasDirectionReversal);
+}
+
+function handNearThroat(hands, nose, chin, w, h, radiusScale = 0.6) {
+    const res = handNearChestOrThroat(hands, nose, chin, w, h);
+    return res.isThroat;
+}
+
+// 3. 嘴部開合角度 (MAR)
 function calculateMAR(lipTop, lipBottom, lipLeft, lipRight) {
     const vDist = Math.hypot(lipTop.x - lipBottom.x, lipTop.y - lipBottom.y);
     const hDist = Math.hypot(lipLeft.x - lipRight.x, lipLeft.y - lipRight.y);
@@ -1122,14 +1256,7 @@ function calculateMAR(lipTop, lipBottom, lipLeft, lipRight) {
 }
 
 function calculateBodyShaking(noseHistory, faceSize) {
-    if (!noseHistory || noseHistory.length < 2 || faceSize <= 0) return 0.0;
-    let totalDisp = 0.0;
-    for (let i = 1; i < noseHistory.length; i++) {
-        const dx = noseHistory[i].x - noseHistory[i - 1].x;
-        const dy = noseHistory[i].y - noseHistory[i - 1].y;
-        totalDisp += Math.hypot(dx, dy);
-    }
-    return totalDisp / faceSize;
+    return isBodyShakingContinuous ? 2.5 : 0.0;
 }
 
 // 3. 嘴唇藍光比率與發紺缺氧分析 (Cyanosis Detection)
@@ -1258,7 +1385,7 @@ function drawHandSkeleton(ctx, handLandmarksList, w, h, isHandOnNeck = false) {
 // 原版 UI Overlay 與 HUD 視覺繪製 Helper Functions
 // =============================================================================
 
-function updateHudStats(stateStr, marVal, jawStdVal, chewCnt, swallowCnt, jawVelVal, fusionScore) {
+function updateHudStats(stateStr, marVal, jawStdVal, chewCnt, swallowCnt, jawVelVal, fusionScore, simultaneousDuration = 0.0) {
     const elState = document.getElementById('hud-state');
     if (elState) {
         elState.innerText = stateStr;
@@ -1285,9 +1412,20 @@ function updateHudStats(stateStr, marVal, jawStdVal, chewCnt, swallowCnt, jawVel
 
     const elFusion = document.getElementById('hud-fusion-score');
     if (elFusion) elFusion.innerText = `${fusionScore.toFixed(2)} / 1.0`;
+
+    const elShake = document.getElementById('hud-shake-timer');
+    if (elShake) {
+        if (simultaneousDuration > 0) {
+            elShake.innerText = `${simultaneousDuration.toFixed(1)}s / 5.0s`;
+            elShake.className = simultaneousDuration >= 3.5 ? 'font-mono text-rose-400 font-bold animate-pulse' : 'font-mono text-amber-400 font-bold';
+        } else {
+            elShake.innerText = '0.0s / 5.0s (正常)';
+            elShake.className = 'font-mono text-emerald-400';
+        }
+    }
 }
 
-function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, stateStr, marVal, jawStdVal, chewCnt, isHandOnNeck) {
+function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, stateStr, marVal, jawStdVal, chewCnt, isHandOnNeck = false, isHandOnChest = false, isBodyShaking = false, simultaneousSec = 0.0) {
     if (landmarks) {
         // 🎯 1. 繪製 MediaPipe 臉部 3D 全骨架與特徵網格 (藍色面輪廓、眼睛、眉毛、雙唇)
         drawFaceMeshSkeleton(ctx, landmarks, w, h);
@@ -1341,34 +1479,79 @@ function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, state
         ctx.stroke();
 
         // 3. 繪製 Throat Zone (喉嚨自適應圈圈)
-        const throatX = (chin.x + 0.6 * (chin.x - nose.x)) * w;
-        const throatY = (chin.y + 0.6 * (chin.y - nose.y)) * h;
-        const throatR = Math.max(faceH * 0.6 * w, 12.0);
+        const throatX = (chin.x + 0.5 * (chin.x - nose.x)) * w;
+        const throatY = (chin.y + 0.5 * (chin.y - nose.y)) * h;
+        const throatR = Math.max(faceH * 0.55 * w, 15.0);
 
         ctx.strokeStyle = isHandOnNeck ? '#f43f5e' : '#d946ef';
-        ctx.lineWidth = isHandOnNeck ? 4.0 : 2.0;
+        ctx.lineWidth = isHandOnNeck ? 3.5 : 1.8;
         ctx.beginPath();
         ctx.arc(throatX, throatY, throatR, 0, Math.PI * 2);
         ctx.stroke();
 
         ctx.fillStyle = isHandOnNeck ? '#f43f5e' : '#d946ef';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.fillText('Throat Zone (喉嚨)', throatX - 40, throatY - throatR - 5);
+
+        // 🎯 4. 繪製 Chest Zone (胸口拍胸區域圈圈)
+        const chestX = (chin.x + 1.35 * (chin.x - nose.x)) * w;
+        const chestY = (chin.y + 1.35 * (chin.y - nose.y)) * h;
+        const chestR = Math.max(faceH * 1.1 * w, 35.0);
+
+        ctx.strokeStyle = isHandOnChest ? '#f43f5e' : 'rgba(56, 189, 248, 0.7)';
+        ctx.lineWidth = isHandOnChest ? 3.5 : 1.8;
         ctx.beginPath();
-        ctx.arc(throatX, throatY, 4, 0, Math.PI * 2);
-        ctx.fill();
+        ctx.arc(chestX, chestY, chestR, 0, Math.PI * 2);
+        ctx.stroke();
 
-        ctx.font = 'bold 12px sans-serif';
-        ctx.fillText('Throat Zone', throatX - 35, throatY - throatR - 6);
+        ctx.fillStyle = isHandOnChest ? '#f43f5e' : '#38bdf8';
+        ctx.font = 'bold 11px sans-serif';
+        ctx.fillText('Chest Zone (胸口)', chestX - 42, chestY - chestR - 5);
 
-        // 4. 繪製手部 21 關節骨架
+        // 5. 繪製手部 21 關節骨架 (若摸喉或拍胸均高亮為玫瑰紅)
         if (handLandmarks && handLandmarks.length > 0) {
-            drawHandSkeleton(ctx, handLandmarks, w, h, isHandOnNeck);
+            drawHandSkeleton(ctx, handLandmarks, w, h, (isHandOnNeck || isHandOnChest));
         }
 
-        // 5. 吞嚥狀態大字提示 (SWALLOWING...)
+        // 6. 吞嚥狀態大字提示 (SWALLOWING...)
         if (stateStr === 'SWALLOW') {
             ctx.fillStyle = '#ef4444';
             ctx.font = 'bold 28px sans-serif';
             ctx.fillText('SWALLOWING...', 20, h - 30);
+        }
+
+        // 🎯 7. 拍胸＋前後左右晃動 5 秒即時倒數 HUD 進度條
+        if (simultaneousSec > 0) {
+            const barW = Math.min(w * 0.85, 340);
+            const barH = 34;
+            const barX = (w - barW) / 2;
+            const barY = 18;
+
+            ctx.save();
+            // 背景外框
+            ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
+            ctx.strokeStyle = simultaneousSec >= 4.0 ? '#ef4444' : '#f59e0b';
+            ctx.lineWidth = 2.5;
+            ctx.beginPath();
+            if (ctx.roundRect) {
+                ctx.roundRect(barX, barY, barW, barH + 18, 12);
+            } else {
+                ctx.rect(barX, barY, barW, barH + 18);
+            }
+            ctx.fill();
+            ctx.stroke();
+
+            // 倒數文字
+            ctx.fillStyle = '#fef08a';
+            ctx.font = 'bold 13px sans-serif';
+            ctx.fillText(`⚠️ 拍胸＋前後左右晃動: ${simultaneousSec.toFixed(1)}s / 5.0s`, barX + 16, barY + 20);
+
+            // 填滿進度條
+            const progress = Math.min(1.0, simultaneousSec / 5.0);
+            const fillW = (barW - 32) * progress;
+            ctx.fillStyle = progress >= 0.8 ? '#ef4444' : '#f59e0b';
+            ctx.fillRect(barX + 16, barY + 28, fillW, 8);
+            ctx.restore();
         }
 
     } else {
