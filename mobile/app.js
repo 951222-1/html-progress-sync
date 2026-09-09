@@ -113,10 +113,10 @@ let peerConnection = null;
 let supabaseChannel = null;
 
 // 初始化啟動
-document.addEventListener('DOMContentLoaded', async () => {
+document.addEventListener('DOMContentLoaded', () => {
     initSupabase();
     setupCanvasAndVideo();
-    await initMediaPipe();
+    initMediaPipe();
     openLoginModal();
 });
 
@@ -162,34 +162,38 @@ async function loginAsPatient(code, nameStr) {
         if (label) label.innerText = `${nameStr} (${code})`;
         closeLoginModal();
 
-        // 從 Supabase 載入該個案檔案與個人化動態基準
-        if (supabaseClient) {
-            try {
-                const { data } = await supabaseClient
-                    .from('patient_profiles')
-                    .select('*')
-                    .eq('patient_code', code)
-                    .single();
-                if (data) {
-                    currentPatient.id = data.id;
-                    currentPatient.diet_type = data.diet_type || 'soft';
-                    currentPatient.baseline_chew = data.baseline_chew_duration || 0.85;
-                    currentPatient.baseline_swallow = data.baseline_swallow_pause || 1.10;
-                    selectDiet(currentPatient.diet_type);
-                    console.log(`[Supabase] Loaded patient baseline: chew=${data.baseline_chew_duration}s`);
-                }
-            } catch (err) {
-                console.warn('[Supabase] Could not fetch profile, using local defaults:', err);
-            }
+        // 1. 立即啟動相機與用餐場次，確保在使用者點擊手勢 (Gesture Context) 內觸發 getUserMedia
+        let cameraPromise = Promise.resolve();
+        if (!isMealActive) {
+            cameraPromise = startMealSession();
         }
 
-        // 初始化 WebRTC 信令頻道
+        // 2. 背景非同步載入 Supabase 個案檔案與個人化基準
+        if (supabaseClient) {
+            supabaseClient
+                .from('patient_profiles')
+                .select('*')
+                .eq('patient_code', code)
+                .single()
+                .then(({ data }) => {
+                    if (data) {
+                        currentPatient.id = data.id;
+                        currentPatient.diet_type = data.diet_type || 'soft';
+                        currentPatient.baseline_chew = data.baseline_chew_duration || 0.85;
+                        currentPatient.baseline_swallow = data.baseline_swallow_pause || 1.10;
+                        selectDiet(currentPatient.diet_type);
+                        console.log(`[Supabase] Loaded patient baseline: chew=${data.baseline_chew_duration}s`);
+                    }
+                })
+                .catch((err) => {
+                    console.warn('[Supabase] Could not fetch profile, using local defaults:', err);
+                });
+        }
+
+        // 3. 初始化 WebRTC 信令頻道
         setupWebRTCSignaling();
 
-        // 🎯 自動順暢開啟相機與啟動用餐場次！
-        if (!isMealActive) {
-            await startMealSession();
-        }
+        await cameraPromise;
     } catch (e) {
         console.error('[Login] Error in loginAsPatient:', e);
         closeLoginModal();
@@ -893,71 +897,7 @@ function calculateBodyShaking(noseHistory, faceSize) {
     return totalDisp / faceSize;
 }
 
-// 3. 無聲窒息與咀嚼吞嚥狀態機 (Silent Choke Detector)
-class SilentChokeDetector {
-    constructor(holdSec = 3.0) {
-        this.hold = holdSec;
-        this.since = null;
-    }
-
-    update(mar, movementStd, audioEnergy, mouthOpenTh = 0.3, stillTh = 0.05, quietTh = 0.1) {
-        const cond = (mar > mouthOpenTh && movementStd < stillTh && audioEnergy < quietTh);
-        const now = performance.now() / 1000.0;
-        if (cond) {
-            if (this.since === null) {
-                this.since = now;
-            } else if (now - this.since >= this.hold) {
-                this.since = null;
-                return true;
-            }
-        } else {
-            this.since = null;
-        }
-        return false;
-    }
-}
-
-// 4. 多模態時間窗證據加權融合演算法 (Evidence Fusion)
-class EvidenceFusion {
-    constructor(windowSec = 5.0, threshold = 1.0, cooldownSec = 10.0) {
-        this.window = windowSec;
-        this.threshold = threshold;
-        this.cooldown = cooldownSec;
-        this.sources = {};
-        this.lastFire = -1e9;
-    }
-
-    observe(source, weight) {
-        if (weight > 0) {
-            this.sources[source] = { time: performance.now() / 1000.0, weight: weight };
-        }
-    }
-
-    score() {
-        const now = performance.now() / 1000.0;
-        let sum = 0.0;
-        const validSources = {};
-        for (const [src, data] of Object.entries(this.sources)) {
-            if (now - data.time <= this.window) {
-                validSources[src] = data;
-                sum += data.weight;
-            }
-        }
-        this.sources = validSources;
-        return sum;
-    }
-
-    check() {
-        const now = performance.now() / 1000.0;
-        if (this.score() >= this.threshold && (now - this.lastFire >= this.cooldown)) {
-            this.lastFire = now;
-            return true;
-        }
-        return false;
-    }
-}
-
-// 5. 嘴唇藍光比率與發紺缺氧分析 (Cyanosis Detection)
+// 3. 嘴唇藍光比率與發紺缺氧分析 (Cyanosis Detection)
 function blueness(lipRGB) {
     const [r, g, b] = lipRGB;
     const s = r + g + b;
