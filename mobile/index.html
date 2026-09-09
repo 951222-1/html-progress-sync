@@ -60,15 +60,19 @@
             <!-- Canvas 用於繪製即時骨架、粉紅喉嚨圈與下巴波形 -->
             <canvas id="ai-canvas" class="w-full h-full object-cover"></canvas>
 
-            <!-- MediaPipe 載入提示層 (初始化完成後自動隱藏) -->
-            <div id="loading-overlay" class="absolute inset-0 bg-slate-950/90 backdrop-blur flex flex-col items-center justify-center p-6 text-center space-y-3 z-30">
+            <!-- MediaPipe 載入提示層 (預設隱藏，不再卡住畫面) -->
+            <div id="loading-overlay" class="absolute inset-0 bg-slate-950/90 backdrop-blur hidden flex flex-col items-center justify-center p-6 text-center space-y-3 z-30">
                 <div class="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
                 <h3 class="font-bold text-slate-200 text-sm">正在載入 MediaPipe AI 模型...</h3>
-                <p class="text-[11px] text-slate-400">首次載入可能需數秒，請稍候</p>
+                <p class="text-[11px] text-slate-400">背景下載中，您可以直接開始用餐與開啟相機</p>
             </div>
 
             <!-- 實時狀態 HUD Overlay -->
             <div class="absolute top-3 left-3 bg-slate-900/80 backdrop-blur px-3 py-1.5 rounded-xl border border-slate-700/60 text-[11px] space-y-0.5">
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">AI 模型:</span>
+                    <span id="hud-ai-status" class="font-bold text-amber-400">⏳ 載入中...</span>
+                </div>
                 <div class="flex items-center space-x-2">
                     <span class="text-slate-400">當前質地:</span>
                     <span id="hud-diet" class="font-bold text-blue-300">普通餐食</span>
