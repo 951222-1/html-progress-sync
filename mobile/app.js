@@ -155,34 +155,45 @@ function closeLoginModal() {
 }
 
 async function loginAsPatient(code, nameStr) {
-    currentPatient.patient_code = code;
-    currentPatient.full_name = nameStr;
-    document.getElementById('current-patient-label').innerText = `${nameStr} (${code})`;
-    closeLoginModal();
+    try {
+        currentPatient.patient_code = code;
+        currentPatient.full_name = nameStr;
+        const label = document.getElementById('current-patient-label');
+        if (label) label.innerText = `${nameStr} (${code})`;
+        closeLoginModal();
 
-    // 從 Supabase 載入該個案檔案與個人化動態基準
-    if (supabaseClient) {
-        try {
-            const { data, error } = await supabaseClient
-                .from('patient_profiles')
-                .select('*')
-                .eq('patient_code', code)
-                .single();
-            if (data) {
-                currentPatient.id = data.id;
-                currentPatient.diet_type = data.diet_type || 'soft';
-                currentPatient.baseline_chew = data.baseline_chew_duration || 0.85;
-                currentPatient.baseline_swallow = data.baseline_swallow_pause || 1.10;
-                selectDiet(currentPatient.diet_type);
-                console.log(`[Supabase] Loaded patient baseline: chew=${data.baseline_chew_duration}s`);
+        // 從 Supabase 載入該個案檔案與個人化動態基準
+        if (supabaseClient) {
+            try {
+                const { data } = await supabaseClient
+                    .from('patient_profiles')
+                    .select('*')
+                    .eq('patient_code', code)
+                    .single();
+                if (data) {
+                    currentPatient.id = data.id;
+                    currentPatient.diet_type = data.diet_type || 'soft';
+                    currentPatient.baseline_chew = data.baseline_chew_duration || 0.85;
+                    currentPatient.baseline_swallow = data.baseline_swallow_pause || 1.10;
+                    selectDiet(currentPatient.diet_type);
+                    console.log(`[Supabase] Loaded patient baseline: chew=${data.baseline_chew_duration}s`);
+                }
+            } catch (err) {
+                console.warn('[Supabase] Could not fetch profile, using local defaults:', err);
             }
-        } catch (err) {
-            console.warn('[Supabase] Could not fetch profile, using local defaults:', err);
         }
-    }
 
-    // 初始化 WebRTC 信令頻道
-    setupWebRTCSignaling();
+        // 初始化 WebRTC 信令頻道
+        setupWebRTCSignaling();
+
+        // 🎯 自動順暢開啟相機與啟動用餐場次！
+        if (!isMealActive) {
+            await startMealSession();
+        }
+    } catch (e) {
+        console.error('[Login] Error in loginAsPatient:', e);
+        closeLoginModal();
+    }
 }
 
 // 4. MediaPipe WebAssembly 非同步背景初始化
