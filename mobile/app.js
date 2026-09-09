@@ -179,28 +179,37 @@ function selectDiet(dietKey) {
 }
 
 function openLoginModal() {
-    document.getElementById('login-modal').classList.remove('hidden');
+    const modal = document.getElementById('login-modal');
+    if (modal) modal.classList.remove('hidden');
 }
 
 function closeLoginModal() {
-    document.getElementById('login-modal').classList.add('hidden');
+    const modal = document.getElementById('login-modal');
+    if (modal) modal.classList.add('hidden');
 }
 
-async function loginAsPatient(code, nameStr) {
+function loginAsPatient(code, nameStr) {
     try {
+        console.log(`[Login] Selected patient: ${nameStr} (${code})`);
         currentPatient.patient_code = code;
         currentPatient.full_name = nameStr;
+        
         const label = document.getElementById('current-patient-label');
         if (label) label.innerText = `${nameStr} (${code})`;
+
+        // 1. 立即關閉對話框與更新選單 UI (絕不安靜卡死)
         closeLoginModal();
 
-        // 1. 立即啟動相機與用餐場次，確保在使用者點擊手勢 (Gesture Context) 內觸發 getUserMedia
-        let cameraPromise = Promise.resolve();
-        if (!isMealActive) {
-            cameraPromise = startMealSession();
-        }
+        // 2. 異步非阻塞啟動相機
+        setTimeout(() => {
+            if (!isMealActive) {
+                startMealSession().catch(err => {
+                    console.warn('[Camera] Gracefully handled startup error:', err);
+                });
+            }
+        }, 30);
 
-        // 2. 背景非同步載入 Supabase 個案檔案與個人化基準
+        // 3. 背景非同步載入 Supabase 個案檔案與個人化基準
         if (supabaseClient) {
             supabaseClient
                 .from('patient_profiles')
@@ -222,28 +231,56 @@ async function loginAsPatient(code, nameStr) {
                 });
         }
 
-        // 3. 初始化 WebRTC 信令頻道
+        // 4. 初始化 WebRTC 信令頻道
         setupWebRTCSignaling();
 
-        await cameraPromise;
     } catch (e) {
         console.error('[Login] Error in loginAsPatient:', e);
         closeLoginModal();
     }
 }
 
-// 4. MediaPipe WebAssembly 非同步背景初始化
+// 🎯 全域 Window 顯式綁定 (全瀏覽器與載入時序雙重保險)
+window.selectDiet = selectDiet;
+window.openLoginModal = openLoginModal;
+window.closeLoginModal = closeLoginModal;
+window.loginAsPatient = loginAsPatient;
+window.startMealSession = startMealSession;
+window.endMealSession = endMealSession;
+window.dismissAlertOverlay = dismissAlertOverlay;
+
+// 🎯 事件委派 (Event Delegation Backup) - 防止舊快取或內聯 onclick 失敗
+document.addEventListener('click', (evt) => {
+    const btn = evt.target.closest('[data-patient-code]');
+    if (btn) {
+        const code = btn.getAttribute('data-patient-code');
+        const name = btn.getAttribute('data-patient-name') || code;
+        if (typeof window.loginAsPatient === 'function') {
+            window.loginAsPatient(code, name);
+        }
+    }
+});
+
 async function initMediaPipe() {
     const aiStatus = document.getElementById('hud-ai-status');
     try {
-        const Resolver = window.FilesetResolver || (window.tasksVision && window.tasksVision.FilesetResolver);
-        const FaceL = window.FaceLandmarker || (window.tasksVision && window.tasksVision.FaceLandmarker);
-        const HandL = window.HandLandmarker || (window.tasksVision && window.tasksVision.HandLandmarker);
+        let Resolver = window.FilesetResolver || (window.tasksVision && window.tasksVision.FilesetResolver);
+        let FaceL = window.FaceLandmarker || (window.tasksVision && window.tasksVision.FaceLandmarker);
+        let HandL = window.HandLandmarker || (window.tasksVision && window.tasksVision.HandLandmarker);
 
         if (!Resolver || !FaceL || !HandL) {
-            console.warn('[MediaPipe] Tasks Vision global symbols not found. Falling back.');
+            console.log('[MediaPipe] Dynamically importing Tasks Vision module...');
+            const visionMod = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0");
+            window.tasksVision = visionMod;
+            Resolver = visionMod.FilesetResolver;
+            FaceL = visionMod.FaceLandmarker;
+            HandL = visionMod.HandLandmarker;
+        }
+
+        if (!Resolver || !FaceL || !HandL) {
+            console.warn('[MediaPipe] Tasks Vision symbols not available. Running without AI overlay.');
             if (aiStatus) {
-                aiStatus.innerText = '⚠️ 語音模擬模式';
+                aiStatus.innerText = '⚠️ 純影像模式';
                 aiStatus.className = 'font-bold text-slate-400';
             }
             return;
@@ -317,17 +354,52 @@ function setupCanvasAndVideo() {
     aiCtx = aiCanvas.getContext('2d');
 }
 
-// 5. 開始與結束用餐場次處理
-async function startMealSession() {
+// 5. 多階相機與麥克風容錯啟動 (3-Tier Fallback Camera Getter)
+async function getWebcamStream() {
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+        throw new Error("您的瀏覽器不支援 getUserMedia 存取相機！");
+    }
+
+    // Tier 1: 最佳畫質視訊 (1280x720) + 麥克風音訊
     try {
-        webcamStream = await navigator.mediaDevices.getUserMedia({
-            video: {
-                facingMode: "user",
-                width: { ideal: 1280 },
-                height: { ideal: 720 }
-            },
+        return await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
             audio: true
         });
+    } catch (e1) {
+        console.warn('[Camera] Tier 1 (Ideal Video+Audio) failed, trying Tier 2...', e1);
+    }
+
+    // Tier 2: 基礎視訊 + 麥克風音訊
+    try {
+        return await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: true
+        });
+    } catch (e2) {
+        console.warn('[Camera] Tier 2 (Simple Video+Audio) failed, trying Tier 3 (Video ONLY)...', e2);
+    }
+
+    // Tier 3: 純視訊 (無麥克風/麥克風存取受限)
+    try {
+        return await navigator.mediaDevices.getUserMedia({
+            video: true,
+            audio: false
+        });
+    } catch (e3) {
+        console.error('[Camera] Tier 3 (Video ONLY) failed:', e3);
+        throw e3;
+    }
+}
+
+async function startMealSession() {
+    if (isMealActive && webcamStream) {
+        console.log('[Camera] Meal session already active.');
+        return;
+    }
+
+    try {
+        webcamStream = await getWebcamStream();
 
         webcamVideo.srcObject = webcamStream;
         await webcamVideo.play();
@@ -345,8 +417,12 @@ async function startMealSession() {
             container.style.aspectRatio = `${vW} / ${vH}`;
         }
 
-        // 綁定 Web Audio API 聲學分析
-        setupAudioAnalyzer(webcamStream);
+        // 嘗試綁定 Web Audio API 聲學分析 (若包含音軌)
+        if (webcamStream.getAudioTracks().length > 0) {
+            setupAudioAnalyzer(webcamStream);
+        } else {
+            console.warn('[Audio] No audio track available in camera stream.');
+        }
 
         // 重設用餐指標
         mealMetrics = {
@@ -366,12 +442,21 @@ async function startMealSession() {
         };
 
         isMealActive = true;
-        document.getElementById('btn-start-meal').disabled = true;
-        document.getElementById('btn-start-meal').classList.add('opacity-50', 'cursor-not-allowed');
-        document.getElementById('btn-end-meal').disabled = false;
-        document.getElementById('btn-end-meal').classList.remove('opacity-50', 'cursor-not-allowed', 'bg-slate-800', 'text-slate-500');
-        document.getElementById('btn-end-meal').classList.add('bg-rose-600', 'text-white', 'hover:bg-rose-500');
-        document.getElementById('meal-status-text').innerText = '用餐中 🍽️';
+        const btnStart = document.getElementById('btn-start-meal');
+        const btnEnd = document.getElementById('btn-end-meal');
+
+        if (btnStart) {
+            btnStart.disabled = true;
+            btnStart.classList.add('opacity-50', 'cursor-not-allowed');
+        }
+        if (btnEnd) {
+            btnEnd.disabled = false;
+            btnEnd.classList.remove('opacity-50', 'cursor-not-allowed', 'bg-slate-800', 'text-slate-500');
+            btnEnd.classList.add('bg-rose-600', 'text-white', 'hover:bg-rose-500');
+        }
+
+        const mealStatusText = document.getElementById('meal-status-text');
+        if (mealStatusText) mealStatusText.innerText = '用餐中 🍽️';
 
         // 於 Supabase 寫入新用餐紀錄
         if (supabaseClient) {
@@ -389,23 +474,28 @@ async function startMealSession() {
         }
 
         // 開始影音串流與 WebRTC P2P
-        startPeerConnection();
+        setupWebRTCSignaling();
 
         // 啟動逐幀監測迴圈
         requestAnimationFrame(processVideoFrame);
 
     } catch (err) {
         console.error('Camera/Mic permission failed:', err);
+        isMealActive = false;
         const isSecure = window.isSecureContext;
-        let hintMsg = "無法取得相機或麥克風權限！\n\n";
+        let hintMsg = "無法取得相機權限！\n\n";
         if (!isSecure) {
             hintMsg += "💡 原因：瀏覽器規定存取相機必須使用【安全通道 (HTTPS 或 localhost)】！\n\n";
             hintMsg += "【解法建議】：\n";
             hintMsg += "1. 電腦端測試：請將網址改為 http://localhost:8080/index.html 開啟。\n";
             hintMsg += "2. 手機端測試：請使用 server.py 產生的 Cloudflare 綠色鎖頭 https://...trycloudflare.com 網址開啟。";
         } else {
-            hintMsg += "請檢查您的瀏覽器網址列左側權限圖示，確認已允許開啟「攝影機」與「麥克風」。";
+            hintMsg += "請檢查您的瀏覽器網址列左側權限圖示，確認已允許開啟「攝影機」。";
         }
+        
+        const mealStatusText = document.getElementById('meal-status-text');
+        if (mealStatusText) mealStatusText.innerText = '⚠️ 相機權限受限 (請允許後重試)';
+        
         alert(hintMsg);
     }
 }
@@ -745,11 +835,10 @@ async function processVideoFrame(now) {
 
     // 更新 HUD 即時資訊
     updateHudStats(currentState, mar, movementStd, mealMetrics.totalChews, mealMetrics.swallowCount || 0, mealMetrics.jawVelocity, evidenceFusion.score());
-        // Level 1: 10秒 含飯發呆溫和提醒
-        else if (mealMetrics.jawStillTime >= CONFIG.BASELINES.POUCHING_HINT_SEC && mealMetrics.jawStillTime < (CONFIG.BASELINES.POUCHING_HINT_SEC + 0.5)) {
-            triggerAlertLevel('L1', '🟡 含飯/發呆提醒：長者已靜止 10 秒未咀嚼');
-        }
-
+    
+    // Level 1: 10秒 含飯發呆溫和提醒
+    if (mealMetrics.jawStillTime >= CONFIG.BASELINES.POUCHING_HINT_SEC && mealMetrics.jawStillTime < (CONFIG.BASELINES.POUCHING_HINT_SEC + 0.5)) {
+        triggerAlertLevel('L1', '🟡 含飯/發呆提醒：長者已靜止 10 秒未咀嚼');
     }
 
     // 廣播最新狀態至 WebRTC 與 Supabase
