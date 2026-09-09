@@ -125,18 +125,20 @@ async function loginAsPatient(code, nameStr) {
     setupWebRTCSignaling();
 }
 
-// 4. MediaPipe WebAssembly 初始化
+// 4. MediaPipe WebAssembly 非同步背景初始化
 async function initMediaPipe() {
-    const loadingElem = document.getElementById('loading-overlay');
+    const aiStatus = document.getElementById('hud-ai-status');
     try {
-        // 全域符號解析相容處理 (相容不同 CDN 匯出名稱)
         const Resolver = window.FilesetResolver || (window.tasksVision && window.tasksVision.FilesetResolver);
         const FaceL = window.FaceLandmarker || (window.tasksVision && window.tasksVision.FaceLandmarker);
         const HandL = window.HandLandmarker || (window.tasksVision && window.tasksVision.HandLandmarker);
 
         if (!Resolver || !FaceL || !HandL) {
-            console.warn('[MediaPipe] Tasks Vision global symbols not found on window. Running in fallback mode.');
-            if (loadingElem) loadingElem.classList.add('hidden');
+            console.warn('[MediaPipe] Tasks Vision global symbols not found. Falling back.');
+            if (aiStatus) {
+                aiStatus.innerText = '⚠️ 語音模擬模式';
+                aiStatus.className = 'font-bold text-slate-400';
+            }
             return;
         }
 
@@ -187,10 +189,16 @@ async function initMediaPipe() {
         }
 
         console.log('[MediaPipe] Face & Hand Landmarkers initialized successfully.');
+        if (aiStatus) {
+            aiStatus.innerText = '🟢 已就緒';
+            aiStatus.className = 'font-bold text-emerald-400';
+        }
     } catch (e) {
         console.error('[MediaPipe] Vision initialization error:', e);
-    } finally {
-        if (loadingElem) loadingElem.classList.add('hidden');
+        if (aiStatus) {
+            aiStatus.innerText = '⚠️ 模型載入受限';
+            aiStatus.className = 'font-bold text-amber-400';
+        }
     }
 }
 
