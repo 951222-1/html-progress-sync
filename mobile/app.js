@@ -144,13 +144,22 @@ const evidenceFusion = new EvidenceFusion(5.0, 1.0, 10.0);
 let peerConnection = null;
 let supabaseChannel = null;
 
-// 初始化啟動
-document.addEventListener('DOMContentLoaded', () => {
+// 初始化啟動 (安全支援 DOMContentLoaded 與已就緒狀態)
+function startApp() {
     initSupabase();
     setupCanvasAndVideo();
     initMediaPipe();
     openLoginModal();
-});
+    if (window._selectedPatient) {
+        loginAsPatient(window._selectedPatient.code, window._selectedPatient.nameStr);
+    }
+}
+
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', startApp);
+} else {
+    startApp();
+}
 
 // 2. Supabase Client 初始化
 function initSupabase() {
@@ -245,6 +254,7 @@ window.selectDiet = selectDiet;
 window.openLoginModal = openLoginModal;
 window.closeLoginModal = closeLoginModal;
 window.loginAsPatient = loginAsPatient;
+window._fullLoginAsPatient = loginAsPatient;
 window.startMealSession = startMealSession;
 window.endMealSession = endMealSession;
 window.dismissAlertOverlay = dismissAlertOverlay;
