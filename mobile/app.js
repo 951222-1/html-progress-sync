@@ -189,12 +189,18 @@ function selectDiet(dietKey) {
 
 function openLoginModal() {
     const modal = document.getElementById('login-modal');
-    if (modal) modal.classList.remove('hidden');
+    if (modal) {
+        modal.style.display = 'flex';
+        modal.classList.remove('hidden');
+    }
 }
 
 function closeLoginModal() {
     const modal = document.getElementById('login-modal');
-    if (modal) modal.classList.add('hidden');
+    if (modal) {
+        modal.style.display = 'none';
+        modal.classList.add('hidden');
+    }
 }
 
 function loginAsPatient(code, nameStr) {
