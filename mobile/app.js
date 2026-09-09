@@ -447,17 +447,35 @@ async function processVideoFrame(now) {
     }
 
     // B. 執行 MediaPipe 臉部與手部偵測
-    const faceResults = faceLandmarker ? faceLandmarker.detectForVideo(webcamVideo, now) : null;
-    const handResults = handLandmarker ? handLandmarker.detectForVideo(webcamVideo, now) : null;
+    const timestampMs = performance.now();
+    let faceResults = null;
+    let handResults = null;
+    if (faceLandmarker) {
+        try { faceResults = faceLandmarker.detectForVideo(webcamVideo, timestampMs); } catch (e) {}
+    }
+    if (handLandmarker) {
+        try { handResults = handLandmarker.detectForVideo(webcamVideo, timestampMs); } catch (e) {}
+    }
 
-    let faceLandmarks = (faceResults && faceResults.faceLandmarks.length > 0) ? faceResults.faceLandmarks[0] : null;
-    let handLandmarks = (handResults && handResults.landmarks.length > 0) ? handResults.landmarks : [];
+    let faceLandmarks = (faceResults && faceResults.faceLandmarks && faceResults.faceLandmarks.length > 0) ? faceResults.faceLandmarks[0] : null;
+    let handLandmarks = (handResults && handResults.landmarks && handResults.landmarks.length > 0) ? handResults.landmarks : [];
 
     if (faceLandmarks) {
         // 取出下巴點 (#152) 與鼻尖點 (#1)
         const chin = faceLandmarks[152];
         const nose = faceLandmarks[1];
         const faceH = Math.abs(chin.y - nose.y);
+
+        // 獨立演算法 1: 手抓喉嚨手勢偵測 (handNearThroat)
+        isHandOnNeck = handNearThroat(handLandmarks, nose, chin, aiCanvas.width, aiCanvas.height, 0.6);
+
+        // 🎯 繪製 MediaPipe 臉部 3D 骨架與特徵輪廓
+        drawFaceMeshSkeleton(aiCtx, faceLandmarks, aiCanvas.width, aiCanvas.height);
+
+        // 🎯 繪製 MediaPipe 手部 21 關節骨架連線
+        if (handLandmarks && handLandmarks.length > 0) {
+            drawHandSkeleton(aiCtx, handLandmarks, aiCanvas.width, aiCanvas.height, isHandOnNeck);
+        }
 
         // 1. 計算下巴歸一化移動速度 (Jaw Velocity)
         if (mealMetrics.lastJawY !== null) {
@@ -541,9 +559,6 @@ async function processVideoFrame(now) {
         const throatX = chin.x * aiCanvas.width;
         const throatY = (chin.y + faceH * 0.4) * aiCanvas.height;
         const throatR = faceH * 0.6 * 0.45 * aiCanvas.height;
-
-        // 獨立演算法 1: 手抓喉嚨手勢偵測 (handNearThroat)
-        isHandOnNeck = handNearThroat(handLandmarks, nose, chin, aiCanvas.width, aiCanvas.height, 0.6);
 
         aiCtx.strokeStyle = isHandOnNeck ? '#f43f5e' : '#f472b6';
         aiCtx.lineWidth = isHandOnNeck ? 4 : 2;
@@ -907,4 +922,114 @@ function blueness(lipRGB) {
 
 function isCyanotic(lipRGB, blueTh = 0.38) {
     return blueness(lipRGB) >= blueTh;
+}
+
+// =============================================================================
+// MediaPipe Face & Hand Skeleton Rendering Helpers
+// =============================================================================
+
+const FACE_OVAL_INDICES = [10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377, 152, 148, 176, 149, 150, 136, 172, 58, 132, 93, 234, 127, 162, 21, 54, 103, 67, 109, 10];
+const LIPS_OUTER_INDICES = [61, 146, 91, 181, 84, 17, 314, 405, 321, 375, 291, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95, 78, 61];
+const LIPS_INNER_INDICES = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95, 78];
+const LEFT_EYE_INDICES = [33, 7, 163, 144, 145, 153, 154, 155, 133, 173, 157, 158, 159, 160, 161, 246, 33];
+const RIGHT_EYE_INDICES = [263, 249, 390, 373, 374, 380, 381, 382, 362, 398, 384, 385, 386, 387, 388, 466, 263];
+const LEFT_EYEBROW_INDICES = [70, 63, 105, 66, 107, 55, 65, 52, 53, 46];
+const RIGHT_EYEBROW_INDICES = [300, 293, 334, 296, 336, 285, 295, 282, 283, 276];
+const NOSE_INDICES = [168, 6, 197, 195, 5, 4, 1, 19, 94, 2];
+
+const HAND_CONNECTIONS = [
+    [0,1],[1,2],[2,3],[3,4],
+    [0,5],[5,6],[6,7],[7,8],
+    [9,10],[10,11],[11,12],[0,9],
+    [13,14],[14,15],[15,16],[0,13],
+    [17,18],[18,19],[19,20],[0,17],
+    [5,9],[9,13],[13,17]
+];
+
+function drawPath(ctx, landmarks, indices, color, lineWidth = 1.5, fillStyle = null) {
+    if (!landmarks || indices.length === 0) return;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = lineWidth;
+    ctx.beginPath();
+    let first = true;
+    for (const idx of indices) {
+        const pt = landmarks[idx];
+        if (!pt) continue;
+        const x = pt.x * ctx.canvas.width;
+        const y = pt.y * ctx.canvas.height;
+        if (first) {
+            ctx.moveTo(x, y);
+            first = false;
+        } else {
+            ctx.lineTo(x, y);
+        }
+    }
+    if (fillStyle) {
+        ctx.fillStyle = fillStyle;
+        ctx.fill();
+    }
+    ctx.stroke();
+}
+
+function drawFaceMeshSkeleton(ctx, landmarks, w, h) {
+    if (!landmarks) return;
+
+    // 1. 臉廓、眼睛、眉毛、鼻子 (淡藍色細骨架)
+    drawPath(ctx, landmarks, FACE_OVAL_INDICES, 'rgba(56, 189, 248, 0.5)', 1.2);
+    drawPath(ctx, landmarks, LEFT_EYE_INDICES, 'rgba(56, 189, 248, 0.7)', 1.2);
+    drawPath(ctx, landmarks, RIGHT_EYE_INDICES, 'rgba(56, 189, 248, 0.7)', 1.2);
+    drawPath(ctx, landmarks, LEFT_EYEBROW_INDICES, 'rgba(56, 189, 248, 0.6)', 1.2);
+    drawPath(ctx, landmarks, RIGHT_EYEBROW_INDICES, 'rgba(56, 189, 248, 0.6)', 1.2);
+    drawPath(ctx, landmarks, NOSE_INDICES, 'rgba(56, 189, 248, 0.6)', 1.2);
+
+    // 2. 嘴唇輪廓 (亮翡翠綠，高亮顯示咀嚼與 MAR 狀態)
+    drawPath(ctx, landmarks, LIPS_OUTER_INDICES, '#34d399', 2.2, 'rgba(52, 211, 153, 0.15)');
+    drawPath(ctx, landmarks, LIPS_INNER_INDICES, '#10b981', 1.8);
+
+    // 3. 重點特徵亮點 (下巴 152、鼻尖 1、唇上下左右 13, 14, 61, 291)
+    const keyIndices = [1, 152, 13, 14, 61, 291];
+    for (const idx of keyIndices) {
+        const pt = landmarks[idx];
+        if (!pt) continue;
+        const px = pt.x * w;
+        const py = pt.y * h;
+        ctx.fillStyle = (idx === 13 || idx === 14) ? '#fbbf24' : '#38bdf8';
+        ctx.beginPath();
+        ctx.arc(px, py, 3.5, 0, Math.PI * 2);
+        ctx.fill();
+    }
+}
+
+function drawHandSkeleton(ctx, handLandmarksList, w, h, isHandOnNeck = false) {
+    if (!handLandmarksList || handLandmarksList.length === 0) return;
+
+    for (const hand of handLandmarksList) {
+        // 連線顏色：觸發手抓脖子為玫瑰紅 (#f43f5e)，正常為翡翠綠 (#34d399)
+        const lineColor = isHandOnNeck ? '#f43f5e' : '#34d399';
+        ctx.strokeStyle = lineColor;
+        ctx.lineWidth = isHandOnNeck ? 3.0 : 2.0;
+
+        for (const conn of HAND_CONNECTIONS) {
+            const p1 = hand[conn[0]];
+            const p2 = hand[conn[1]];
+            if (!p1 || !p2) continue;
+            ctx.beginPath();
+            ctx.moveTo(p1.x * w, p1.y * h);
+            ctx.lineTo(p2.x * w, p2.y * h);
+            ctx.stroke();
+        }
+
+        // 關節點 (亮白圓點)
+        for (const pt of hand) {
+            const px = pt.x * w;
+            const py = pt.y * h;
+            ctx.fillStyle = '#ffffff';
+            ctx.strokeStyle = lineColor;
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.arc(px, py, 3, 0, Math.PI * 2);
+            ctx.fill();
+            ctx.stroke();
+        }
+    }
 }
