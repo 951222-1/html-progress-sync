@@ -874,6 +874,10 @@ async function processVideoFrame(now) {
         if (currentTime - (window._lastCoughLogTime || 0) >= 3.0) {
             window._lastCoughLogTime = currentTime;
             mealMetrics.coughCount = (mealMetrics.coughCount || 0) + 1;
+            const typeStr = (visionCough && audioEnergy > 0.25) ? "雙流特徵確認" : (visionCough ? "影像頭部急抽動" : "聽覺 YAMNet 咳嗽聲");
+            if (typeof window.recordCoughEvent === 'function') {
+                window.recordCoughEvent(typeStr, "背景靜默紀錄 (無彈窗干擾)");
+            }
             console.log("🤫【靜默後台紀錄】偵測到嗆咳（聲音咳嗽或影像頭部抽動），背景靜默紀錄，無彈窗、不閃紅橫幅。");
         }
     }
