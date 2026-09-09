@@ -1,6 +1,6 @@
 {
-  "last_id": 5,
-  "updated_at": "2026-09-09T01:46:20.025098Z",
+  "last_id": 6,
+  "updated_at": "2026-09-09T03:11:28.735017Z",
   "items": [
     {
       "id": "0001",
@@ -51,6 +51,16 @@
       "summary": "完成 5 大獨立演算法模組 (手抓喉嚨、無聲窒息狀態機、多模態證據融合、嘴唇發紺缺氧、身體晃動位移) 移植至 app.js",
       "filename": "0005_獨立核心偵測演算法模組__5大演算法__JavaScript.html",
       "download_url": "data/html/0005_獨立核心偵測演算法模組__5大演算法__JavaScript.html"
+    },
+    {
+      "id": "0006",
+      "title": "桌面版演算法 100% 還原與行動端 UI 比例修復",
+      "author": "Antigravity AI Agent",
+      "status": "completed",
+      "timestamp": "2026-09-09T03:11:28.734962Z",
+      "summary": "完成行動端封面選單修復、直式視訊比例自適應不壓縮、桌面版五階段進食狀態機還原與 3D 骨架全圖層繪製。",
+      "filename": "0006_桌面版演算法_100__還原與行動端_UI_比例修復.html",
+      "download_url": "data/html/0006_桌面版演算法_100__還原與行動端_UI_比例修復.html"
     }
   ]
 }
