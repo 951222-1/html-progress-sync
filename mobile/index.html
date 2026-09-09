@@ -25,7 +25,195 @@
         window.currentPatient = window.currentPatient || { id: null, patient_code: 'P001', full_name: '王爺爺 (軟食)', diet_type: 'soft', baseline_chew: 0.85, baseline_swallow: 1.10 };
         window.currentDiet = window.currentDiet || 'soft';
 
+        // ====== 個案清單與新增帳號管理 ======
+        function getPatientList() {
+            try {
+                var s = localStorage.getItem('anti_choke_patient_list');
+                if (s) return JSON.parse(s);
+            } catch (e) {}
+            return [
+                { code: 'P001', name: '王爺爺', gender: '男', diet: 'soft', note: '82歲 · 軟食' },
+                { code: 'P002', name: '陳奶奶', gender: '女', diet: 'pureed', note: '78歲 · 碎食' },
+                { code: 'P003', name: '林伯伯', gender: '男', diet: 'regular', note: '85歲 · 普通餐' }
+            ];
+        }
+
+        function renderPatientList() {
+            var list = getPatientList();
+            var container = document.getElementById('patient-list-container');
+            if (!container) return;
+            container.innerHTML = '';
+            list.forEach(function(p) {
+                var btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'patient-select-btn w-full bg-slate-800 hover:bg-slate-700 text-slate-200 p-3 rounded-2xl font-semibold text-left flex items-center justify-between border border-slate-700 transition';
+                btn.setAttribute('data-patient-code', p.code);
+                btn.setAttribute('data-patient-name', p.name + ' (' + (p.gender === '女' ? '女' : '男') + ')');
+                var icon = p.gender === '女' ? '👵' : '👴';
+                var note = p.note || ((p.gender === '女' ? '女性' : '男性') + '個案');
+                btn.innerHTML = '<span style="pointer-events: none;">' + icon + ' ' + p.name + ' (' + p.code + ')</span>' +
+                                '<span style="pointer-events: none;" class="text-xs text-blue-400">' + note + '</span>';
+                btn.onclick = function() {
+                    window.loginAsPatient(p.code, p.name + ' (' + (p.gender === '女' ? '女' : '男') + ')');
+                };
+                container.appendChild(btn);
+            });
+        }
+
+        function showAddPatientView() {
+            var v1 = document.getElementById('patient-select-view');
+            var v2 = document.getElementById('patient-add-view');
+            if (v1) v1.classList.add('hidden');
+            if (v2) v2.classList.remove('hidden');
+            var input = document.getElementById('new-patient-name');
+            if (input) {
+                input.value = '';
+                input.focus();
+            }
+        }
+
+        function showPatientListView() {
+            var v1 = document.getElementById('patient-select-view');
+            var v2 = document.getElementById('patient-add-view');
+            if (v2) v2.classList.add('hidden');
+            if (v1) v1.classList.remove('hidden');
+            renderPatientList();
+        }
+
+        function saveAndLoginNewPatient() {
+            var nameInput = document.getElementById('new-patient-name');
+            var name = nameInput ? nameInput.value.trim() : '';
+            if (!name) {
+                alert('請輸入個案姓名或稱呼！');
+                return;
+            }
+            var genderEl = document.querySelector('input[name="new-patient-gender"]:checked');
+            var gender = genderEl ? genderEl.value : '男';
+
+            var list = getPatientList();
+            var code = 'P' + String(list.length + 1).padStart(3, '0');
+            var newPatient = {
+                code: code,
+                name: name,
+                gender: gender,
+                diet: 'regular',
+                note: (gender === '女' ? '👩 女性' : '👨 男性') + ' · 新增個案'
+            };
+            list.push(newPatient);
+            localStorage.setItem('anti_choke_patient_list', JSON.stringify(list));
+            renderPatientList();
+            showPatientListView();
+            window.loginAsPatient(code, name + ' (' + gender + ')');
+        }
+
+        // ====== 嗆咳紀錄管理 ======
+        function getCoughRecords() {
+            try {
+                var s = localStorage.getItem('anti_choke_cough_records');
+                if (s) return JSON.parse(s);
+            } catch (e) {}
+            return [];
+        }
+
+        function recordCoughEvent(typeStr, detailStr) {
+            var patientName = (window.currentPatient && window.currentPatient.full_name) ? window.currentPatient.full_name : '未知個案';
+            var patientCode = (window.currentPatient && window.currentPatient.patient_code) ? window.currentPatient.patient_code : 'P001';
+            var now = new Date();
+            var timeStr = now.toLocaleTimeString('zh-TW', { hour12: false });
+            var dateStr = (now.getMonth() + 1) + '/' + now.getDate();
+
+            var item = {
+                id: Date.now(),
+                patientCode: patientCode,
+                patientName: patientName,
+                time: dateStr + ' ' + timeStr,
+                type: typeStr || '咳嗽偵測',
+                detail: detailStr || '背景靜默紀錄，無警報干擾'
+            };
+
+            var logs = getCoughRecords();
+            logs.unshift(item);
+            if (logs.length > 100) logs.pop();
+            localStorage.setItem('anti_choke_cough_records', JSON.stringify(logs));
+            updateCoughBadge();
+        }
+
+        function updateCoughBadge() {
+            var logs = getCoughRecords();
+            var badge = document.getElementById('header-cough-badge');
+            if (badge) badge.innerText = logs.length;
+            var foot = document.getElementById('footer-cough-count');
+            if (foot) foot.innerText = logs.length;
+        }
+
+        function renderCoughRecords() {
+            var logs = getCoughRecords();
+            var listEl = document.getElementById('cough-record-list');
+            var mealCntEl = document.getElementById('cough-modal-meal-count');
+            var totalCntEl = document.getElementById('cough-modal-total-count');
+            var patientInfoEl = document.getElementById('cough-modal-patient-info');
+
+            if (patientInfoEl) {
+                var cur = window.currentPatient;
+                patientInfoEl.innerText = cur ? ('個案：' + cur.full_name) : '個案：尚未登入';
+            }
+            if (mealCntEl) {
+                mealCntEl.innerText = (window.mealMetrics && window.mealMetrics.coughCount) ? window.mealMetrics.coughCount : logs.length;
+            }
+            if (totalCntEl) {
+                totalCntEl.innerText = logs.length;
+            }
+
+            if (!listEl) return;
+            if (logs.length === 0) {
+                listEl.innerHTML = '<div class="text-center py-8 text-slate-500 text-xs"><span class="text-3xl block mb-2">🍵</span>目前無任何嗆咳事件紀錄<br>長者進食狀況良好</div>';
+                return;
+            }
+
+            var html = '';
+            logs.forEach(function(item) {
+                html += '<div class="bg-slate-800/70 border border-slate-700/60 p-2.5 rounded-2xl flex items-center justify-between text-xs">' +
+                        '  <div>' +
+                        '    <div class="flex items-center space-x-2">' +
+                        '      <span class="font-bold text-rose-400">⚠️ ' + item.type + '</span>' +
+                        '      <span class="text-[10px] text-slate-400 font-mono">' + item.time + '</span>' +
+                        '    </div>' +
+                        '    <div class="text-[11px] text-slate-400 mt-0.5">' + item.detail + '</div>' +
+                        '  </div>' +
+                        '  <span class="text-[10px] bg-emerald-950/60 text-emerald-400 px-2 py-0.5 rounded-lg border border-emerald-800/40">已存檔</span>' +
+                        '</div>';
+            });
+            listEl.innerHTML = html;
+        }
+
+        function openCoughRecordModal() {
+            renderCoughRecords();
+            var m = document.getElementById('cough-record-modal');
+            if (m) {
+                m.style.display = 'flex';
+                m.classList.remove('hidden');
+            }
+        }
+
+        function closeCoughRecordModal() {
+            var m = document.getElementById('cough-record-modal');
+            if (m) {
+                m.style.display = 'none';
+                m.classList.add('hidden');
+            }
+        }
+
+        function clearAllCoughRecords() {
+            if (confirm('確定要清除所有歷史嗆咳紀錄嗎？')) {
+                localStorage.removeItem('anti_choke_cough_records');
+                if (window.mealMetrics) window.mealMetrics.coughCount = 0;
+                renderCoughRecords();
+                updateCoughBadge();
+            }
+        }
+
         function openLoginModal() {
+            showPatientListView();
             var m = document.getElementById('login-modal');
             if (m) {
                 m.style.display = 'flex';
@@ -78,10 +266,21 @@
         window.closeLoginModal = closeLoginModal;
         window.selectDiet = selectDiet;
         window.loginAsPatient = loginAsPatient;
+        window.getPatientList = getPatientList;
+        window.renderPatientList = renderPatientList;
+        window.showAddPatientView = showAddPatientView;
+        window.showPatientListView = showPatientListView;
+        window.saveAndLoginNewPatient = saveAndLoginNewPatient;
+        window.getCoughRecords = getCoughRecords;
+        window.recordCoughEvent = recordCoughEvent;
+        window.openCoughRecordModal = openCoughRecordModal;
+        window.closeCoughRecordModal = closeCoughRecordModal;
+        window.clearAllCoughRecords = clearAllCoughRecords;
+        window.updateCoughBadge = updateCoughBadge;
     </script>
     <!-- 核心設定與應用腳本引用 (置於 Head 提前解析) -->
-    <script src="config.js?v=20260909_v4"></script>
-    <script src="app.js?v=20260909_v4"></script>
+    <script src="config.js?v=20260909_v6"></script>
+    <script src="app.js?v=20260909_v6"></script>
 </head>
 <body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col justify-between select-none">
 
@@ -95,6 +294,10 @@
             </div>
         </div>
         <div class="flex items-center space-x-2">
+            <button id="btn-cough-records" onclick="openCoughRecordModal()" class="text-xs bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 border border-rose-800/60 px-2.5 py-1.5 rounded-lg font-semibold flex items-center space-x-1.5 transition shadow">
+                <span>📋 嗆咳紀錄</span>
+                <span id="header-cough-badge" class="bg-rose-600 text-white font-bold text-[10px] px-1.5 py-0.2 rounded-full min-w-[16px] text-center">0</span>
+            </button>
             <button id="btn-login-modal" onclick="openLoginModal()" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1.5 rounded-lg border border-slate-700 transition">
                 🔑 身分切換
             </button>
@@ -138,8 +341,8 @@
                 <p class="text-[11px] text-slate-400">背景下載中，您可以直接開始用餐與開啟相機</p>
             </div>
 
-            <!-- 實時狀態 HUD Overlay -->
-            <div class="absolute top-3 left-3 bg-slate-900/80 backdrop-blur px-3 py-1.5 rounded-xl border border-slate-700/60 text-[11px] space-y-0.5 z-20">
+            <!-- 實時狀態 HUD Overlay (已依需求隱藏，使用者不需看到工程數值) -->
+            <div id="hud-stats-overlay" class="absolute top-3 left-3 bg-slate-900/80 backdrop-blur px-3 py-1.5 rounded-xl border border-slate-700/60 text-[11px] space-y-0.5 z-20 hidden">
                 <div class="flex items-center space-x-2">
                     <span class="text-slate-400">進食狀態:</span>
                     <span id="hud-state" class="font-bold text-amber-300">IDLE</span>
@@ -231,53 +434,132 @@
             <span>用餐狀態: </span>
             <span id="meal-status-text" class="font-bold text-slate-300">尚未開始</span>
         </div>
-        <div>
-            <span>即時風險評級: </span>
+        <div class="flex items-center space-x-2">
+            <button onclick="openCoughRecordModal()" class="text-rose-400 hover:text-rose-300 bg-rose-950/40 px-2 py-0.5 rounded border border-rose-800/40 transition flex items-center space-x-1">
+                <span>📋 嗆咳:</span>
+                <span id="footer-cough-count" class="font-bold">0</span>
+                <span>次</span>
+            </button>
             <span id="risk-badge" class="font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">🟢 正常</span>
         </div>
     </footer>
 
-    <!-- 個案登入與 PIN 碼 Modal -->
+    <!-- 個案登入與新增帳號 Modal -->
     <div id="login-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
         <div class="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-xs w-full shadow-2xl space-y-4 relative">
             <button onclick="closeLoginModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white text-sm font-bold p-1">✕</button>
-            <div class="text-center">
-                <span class="text-4xl">🔑</span>
-                <h3 class="font-bold text-lg text-slate-100 mt-2">請選擇被照護者帳號</h3>
-                <p class="text-xs text-slate-400">載入該個案的個人化咀嚼與吞嚥平均值</p>
+
+            <!-- 檢視狀態 1: 選擇現有帳號 -->
+            <div id="patient-select-view" class="space-y-3">
+                <div class="text-center">
+                    <span class="text-4xl">🔑</span>
+                    <h3 class="font-bold text-lg text-slate-100 mt-2">請選擇被照護者帳號</h3>
+                    <p class="text-xs text-slate-400">載入該個案個人化標準或建立新個案</p>
+                </div>
+                
+                <!-- 動態帳號列表容器 -->
+                <div id="patient-list-container" class="space-y-2 max-h-56 overflow-y-auto pr-0.5">
+                    <!-- 由 renderPatientList() 動態生成 -->
+                </div>
+
+                <!-- ➕ 新增帳號按鈕 -->
+                <button type="button" onclick="showAddPatientView()" class="w-full bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 p-3 rounded-2xl font-bold text-sm flex items-center justify-center space-x-2 border border-blue-500/40 transition">
+                    <span>➕ 新增個案帳號</span>
+                </button>
             </div>
-            
-            <div class="space-y-2">
-                <button type="button" onclick="window.loginAsPatient('P001', '王爺爺 (軟食)')" data-patient-code="P001" data-patient-name="王爺爺 (軟食)" style="cursor: pointer; pointer-events: auto;" class="patient-select-btn w-full bg-slate-800 hover:bg-slate-700 text-slate-200 p-3 rounded-2xl font-semibold text-left flex items-center justify-between border border-slate-700 transition">
-                    <span style="pointer-events: none;">👴 王爺爺 (P001)</span>
-                    <span style="pointer-events: none;" class="text-xs text-blue-400">82歲 · 軟食</span>
+
+            <!-- 檢視狀態 2: 新增帳號表單 (姓名/性別) -->
+            <div id="patient-add-view" class="space-y-4 hidden">
+                <div class="text-center">
+                    <span class="text-4xl">📝</span>
+                    <h3 class="font-bold text-lg text-slate-100 mt-2">新增個案基本資料</h3>
+                    <p class="text-xs text-slate-400">建立後將自動儲存並開始使用</p>
+                </div>
+
+                <div class="space-y-3">
+                    <div>
+                        <label class="text-xs font-semibold text-slate-300 block mb-1">姓名 (稱呼) *</label>
+                        <input type="text" id="new-patient-name" placeholder="例如：張爺爺、王奶奶" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
+                    </div>
+
+                    <div>
+                        <label class="text-xs font-semibold text-slate-300 block mb-1">性別 *</label>
+                        <div class="grid grid-cols-2 gap-2">
+                            <label class="flex items-center space-x-2 bg-slate-800 p-2.5 rounded-xl border border-slate-700 cursor-pointer hover:border-blue-500 transition">
+                                <input type="radio" name="new-patient-gender" value="男" checked class="text-blue-500">
+                                <span class="text-xs text-slate-200">👨 男性</span>
+                            </label>
+                            <label class="flex items-center space-x-2 bg-slate-800 p-2.5 rounded-xl border border-slate-700 cursor-pointer hover:border-rose-500 transition">
+                                <input type="radio" name="new-patient-gender" value="女" class="text-rose-500">
+                                <span class="text-xs text-slate-200">👩 女性</span>
+                            </label>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="space-y-2 pt-2">
+                    <button type="button" onclick="saveAndLoginNewPatient()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold p-3 rounded-2xl text-sm shadow transition">
+                        💾 儲存並開始使用
+                    </button>
+                    <button type="button" onclick="showPatientListView()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold p-2.5 rounded-2xl text-xs border border-slate-700 transition">
+                        ⬅️ 返回選擇列表
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- 📋 嗆咳紀錄檢視 Modal -->
+    <div id="cough-record-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 hidden">
+        <div class="bg-slate-900 border border-slate-800 rounded-3xl p-5 max-w-sm w-full shadow-2xl space-y-4 relative flex flex-col max-h-[85vh]">
+            <div class="flex items-center justify-between pb-3 border-b border-slate-800">
+                <div class="flex items-center space-x-2">
+                    <span class="text-2xl">📋</span>
+                    <div>
+                        <h3 class="font-bold text-base text-slate-100">嗆咳事件紀錄</h3>
+                        <p class="text-[11px] text-slate-400" id="cough-modal-patient-info">個案：未登入</p>
+                    </div>
+                </div>
+                <button onclick="closeCoughRecordModal()" class="text-slate-400 hover:text-white text-base font-bold p-1">✕</button>
+            </div>
+
+            <!-- 本次與累計數據 -->
+            <div class="grid grid-cols-2 gap-2 text-center">
+                <div class="bg-slate-800/60 border border-slate-700/50 p-2.5 rounded-2xl">
+                    <span class="text-[10px] text-slate-400 block">本次用餐嗆咳</span>
+                    <span id="cough-modal-meal-count" class="text-xl font-mono font-black text-rose-400">0</span>
+                    <span class="text-[9px] text-slate-500 block">次</span>
+                </div>
+                <div class="bg-slate-800/60 border border-slate-700/50 p-2.5 rounded-2xl">
+                    <span class="text-[10px] text-slate-400 block">歷史紀錄筆數</span>
+                    <span id="cough-modal-total-count" class="text-xl font-mono font-black text-amber-400">0</span>
+                    <span class="text-[9px] text-slate-500 block">筆事件</span>
+                </div>
+            </div>
+
+            <!-- 紀錄清單 -->
+            <div id="cough-record-list" class="flex-1 overflow-y-auto space-y-2 pr-1 max-h-64 min-h-[120px]">
+                <!-- 動態注入 -->
+            </div>
+
+            <!-- 底部動作 -->
+            <div class="flex items-center justify-between pt-3 border-t border-slate-800 text-xs">
+                <button onclick="clearAllCoughRecords()" class="text-slate-500 hover:text-rose-400 transition py-1 px-2">
+                    🗑️ 清空紀錄
                 </button>
-                <button type="button" onclick="window.loginAsPatient('P002', '陳奶奶 (碎食)')" data-patient-code="P002" data-patient-name="陳奶奶 (碎食)" style="cursor: pointer; pointer-events: auto;" class="patient-select-btn w-full bg-slate-800 hover:bg-slate-700 text-slate-200 p-3 rounded-2xl font-semibold text-left flex items-center justify-between border border-slate-700 transition">
-                    <span style="pointer-events: none;">👵 陳奶奶 (P002)</span>
-                    <span style="pointer-events: none;" class="text-xs text-blue-400">78歲 · 碎食</span>
-                </button>
-                <button type="button" onclick="window.loginAsPatient('P003', '林伯伯 (普通餐)')" data-patient-code="P003" data-patient-name="林伯伯 (普通餐)" style="cursor: pointer; pointer-events: auto;" class="patient-select-btn w-full bg-slate-800 hover:bg-slate-700 text-slate-200 p-3 rounded-2xl font-semibold text-left flex items-center justify-between border border-slate-700 transition">
-                    <span style="pointer-events: none;">👨 林伯伯 (P003)</span>
-                    <span style="pointer-events: none;" class="text-xs text-blue-400">85歲 · 普通餐</span>
+                <button onclick="closeCoughRecordModal()" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-4 py-1.5 rounded-xl transition">
+                    關閉
                 </button>
             </div>
         </div>
     </div>
 
-    <!-- 🎯 彈窗即時原生事件綁定 (第3重保險：即使所有 onclick 失效，此處保證直接監聽 DOM 點擊) -->
+    <!-- 🎯 頁面初始化與事件綁定 -->
     <script>
         (function() {
-            var btns = document.querySelectorAll('.patient-select-btn');
-            for (var i = 0; i < btns.length; i++) {
-                (function(btn) {
-                    btn.addEventListener('click', function(e) {
-                        e.preventDefault();
-                        var code = this.getAttribute('data-patient-code') || 'P001';
-                        var name = this.getAttribute('data-patient-name') || '王爺爺 (軟食)';
-                        window.loginAsPatient(code, name);
-                    });
-                })(btns[i]);
-            }
+            // 初始化帳號列表與嗆咳徽章
+            if (typeof renderPatientList === 'function') renderPatientList();
+            if (typeof updateCoughBadge === 'function') updateCoughBadge();
         })();
     </script>
 </body>
