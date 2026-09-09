@@ -17,6 +17,47 @@
         window.HandLandmarker = vision.HandLandmarker;
     </script>
     <link rel="stylesheet" href="style.css">
+    <!-- 全域先行函數定義 (保證在按鈕渲染或點擊前 loginAsPatient 絕對就緒) -->
+    <script>
+        window.currentPatient = window.currentPatient || { id: null, patient_code: 'P001', full_name: '王爺爺 (軟食)', diet_type: 'soft', baseline_chew: 0.85, baseline_swallow: 1.10 };
+        window.currentDiet = window.currentDiet || 'soft';
+
+        window.openLoginModal = window.openLoginModal || function() {
+            const m = document.getElementById('login-modal');
+            if (m) m.classList.remove('hidden');
+        };
+
+        window.closeLoginModal = window.closeLoginModal || function() {
+            const m = document.getElementById('login-modal');
+            if (m) m.classList.add('hidden');
+        };
+
+        window.selectDiet = window.selectDiet || function(dietKey) {
+            window.currentDiet = dietKey;
+            document.querySelectorAll('.diet-btn').forEach(btn => btn.classList.remove('active', 'bg-blue-600', 'text-white'));
+            const activeBtn = document.getElementById('btn-diet-' + dietKey);
+            if (activeBtn) activeBtn.classList.add('active', 'bg-blue-600', 'text-white');
+            const hud = document.getElementById('hud-diet');
+            if (hud) hud.innerText = dietKey === 'regular' ? '普通餐食' : (dietKey === 'pureed' ? '碎食餐' : '軟食餐盒');
+        };
+
+        window.loginAsPatient = function(code, nameStr) {
+            console.log('[Login] Early/Direct loginAsPatient invoked:', code, nameStr);
+            window._selectedPatient = { code: code, nameStr: nameStr };
+            window.closeLoginModal();
+            const label = document.getElementById('current-patient-label');
+            if (label) label.innerText = nameStr + ' (' + code + ')';
+
+            if (typeof window._fullLoginAsPatient === 'function') {
+                window._fullLoginAsPatient(code, nameStr);
+            } else if (typeof window.startMealSession === 'function') {
+                window.startMealSession().catch(function(e) { console.warn(e); });
+            }
+        };
+    </script>
+    <!-- 核心設定與應用腳本引用 (置於 Head 提前解析) -->
+    <script src="config.js?v=20260909_v3"></script>
+    <script src="app.js?v=20260909_v3"></script>
 </head>
 <body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col justify-between select-none">
 
@@ -194,9 +235,5 @@
             </div>
         </div>
     </div>
-
-    <!-- 腳本引用 (含版號快取刷新) -->
-    <script src="config.js?v=20260909_v2"></script>
-    <script src="app.js?v=20260909_v2"></script>
 </body>
 </html>
