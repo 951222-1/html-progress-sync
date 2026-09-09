@@ -1184,6 +1184,9 @@ function updateHudStats(stateStr, marVal, jawStdVal, chewCnt, swallowCnt, jawVel
 
 function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, stateStr, marVal, jawStdVal, chewCnt, isHandOnNeck) {
     if (landmarks) {
+        // 🎯 1. 繪製 MediaPipe 臉部 3D 全骨架與特徵網格 (藍色面輪廓、眼睛、眉毛、雙唇)
+        drawFaceMeshSkeleton(ctx, landmarks, w, h);
+
         const chin = landmarks[152];
         const nose = landmarks[4];
         const p13 = landmarks[13];
