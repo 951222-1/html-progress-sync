@@ -1,0 +1,185 @@
+<!DOCTYPE html>
+<html lang="zh-TW" class="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>防哽咽 AI 照護儀表板 —— 遠端即時監看與數據分析</title>
+    <!-- Tailwind CSS CDN -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Supabase JS Client -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+    <!-- Chart.js CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col">
+
+    <!-- Header 導覽條 -->
+    <header class="bg-slate-900 border-b border-slate-800 px-6 py-3.5 flex items-center justify-between">
+        <div class="flex items-center space-x-3">
+            <span class="text-3xl">🖥️</span>
+            <div>
+                <h1 class="font-bold text-lg text-blue-400">防哽咽 AI 遠端照護大儀表板</h1>
+                <p class="text-xs text-slate-400">即時 WebRTC 低延遲串流 · 4階動態異常監控 · 個案歷史趨勢分析</p>
+            </div>
+        </div>
+        
+        <div class="flex items-center space-x-4">
+            <div class="flex items-center space-x-2 bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-700">
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" id="rt-status-dot"></span>
+                <span class="text-xs font-semibold text-slate-300" id="rt-status-text">Supabase Realtime 已連線</span>
+            </div>
+            
+            <button onclick="toggleAudioMute()" id="btn-toggle-sound" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-xl border border-slate-700 flex items-center space-x-1 transition">
+                <span id="sound-icon">🔊</span>
+                <span id="sound-text">警報音效: 開啟</span>
+            </button>
+        </div>
+    </header>
+
+    <!-- 主要 Dashboard 內容網格 -->
+    <main class="flex-1 p-6 max-w-7xl w-full mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
+
+        <!-- 左側區塊：WebRTC 即時影音監看與 HUD (佔 7 欄) -->
+        <section class="lg:col-span-7 flex flex-col space-y-4">
+            
+            <!-- 視訊播放器視窗 -->
+            <div class="relative w-full aspect-video bg-black rounded-3xl overflow-hidden border-2 border-slate-800 shadow-2xl flex items-center justify-center">
+                <!-- 遠端 WebRTC 視訊標籤 -->
+                <video id="remote-video" autoplay playsinline class="w-full h-full object-cover"></video>
+
+                <!-- 無訊號提示層 -->
+                <div id="no-stream-placeholder" class="absolute inset-0 bg-slate-900/90 backdrop-blur flex flex-col items-center justify-center p-6 text-center space-y-3 z-10">
+                    <span class="text-5xl animate-bounce">📡</span>
+                    <h3 class="font-bold text-slate-200 text-lg">等待個案端開啟相機連線...</h3>
+                    <p class="text-xs text-slate-400 max-w-xs">請確保個案已在手機端登入並按下「開始用餐」，WebRTC 影音串流將自動連結。</p>
+                </div>
+
+                <!-- 現場 HUD 狀態 -->
+                <div class="absolute top-4 left-4 bg-slate-900/80 backdrop-blur px-4 py-2 rounded-2xl border border-slate-700/60 text-xs space-y-1 z-20">
+                    <div class="flex items-center space-x-2">
+                        <span class="text-slate-400">當前監看個案:</span>
+                        <span id="caregiver-patient-name" class="font-bold text-blue-400">王爺爺 (P001)</span>
+                    </div>
+                    <div class="flex items-center space-x-2">
+                        <span class="text-slate-400">當前餐食質地:</span>
+                        <span id="caregiver-diet-type" class="font-bold text-emerald-400">軟食餐盒</span>
+                    </div>
+                </div>
+
+                <!-- 警報亮燈視窗 -->
+                <div id="caregiver-alert-banner" class="absolute top-4 right-4 bg-rose-600 text-white font-bold text-xs px-4 py-2 rounded-2xl border border-rose-400 shadow-lg hidden flex items-center space-x-2 animate-bounce z-20">
+                    <span>🚨</span>
+                    <span id="caregiver-alert-text">觸發 Level 4 急劇嗆咳警報！</span>
+                </div>
+            </div>
+
+            <!-- 即時數據卡片網格 -->
+            <div class="grid grid-cols-5 gap-2.5">
+                <div class="bg-slate-900 border border-slate-800 p-3 rounded-2xl">
+                    <span class="text-[10px] text-slate-400 block">累積咀嚼數</span>
+                    <span id="stat-chews" class="text-xl font-black font-mono text-emerald-400">0</span>
+                    <span class="text-[9px] text-slate-500 block">次</span>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 p-3 rounded-2xl">
+                    <span class="text-[10px] text-slate-400 block">成功吞嚥</span>
+                    <span id="stat-swallows" class="text-xl font-black font-mono text-blue-400">0</span>
+                    <span class="text-[9px] text-slate-500 block">次</span>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 p-3 rounded-2xl">
+                    <span class="text-[10px] text-slate-400 block">下巴速度</span>
+                    <span id="stat-jaw-vel" class="text-xl font-black font-mono text-purple-400">0.00</span>
+                    <span class="text-[9px] text-slate-500 block">Vel</span>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 p-3 rounded-2xl">
+                    <span class="text-[10px] text-slate-400 block">發呆超時</span>
+                    <span id="stat-pouching" class="text-xl font-black font-mono text-amber-400">0</span>
+                    <span class="text-[9px] text-slate-500 block">次</span>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 p-3 rounded-2xl">
+                    <span class="text-[10px] text-slate-400 block">嗆咳事件</span>
+                    <span id="stat-coughs" class="text-xl font-black font-mono text-rose-400">0</span>
+                    <span class="text-[9px] text-slate-500 block">次</span>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- 右側區塊：個案動態基準校正與實時警報事件 (佔 5 欄) -->
+        <section class="lg:col-span-5 flex flex-col space-y-4">
+            
+            <!-- 個人化動態校正面板 -->
+            <div class="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-3">
+                <div class="flex items-center justify-between border-b border-slate-800 pb-3">
+                    <h3 class="font-bold text-base text-slate-100 flex items-center space-x-2">
+                        <span>🎯</span>
+                        <span>個人化動態基準校正面板</span>
+                    </h3>
+                    <span class="text-[10px] bg-blue-500/10 text-blue-400 px-2 py-0.5 rounded border border-blue-500/20">3餐自適應學習</span>
+                </div>
+
+                <div class="space-y-2 text-xs">
+                    <div class="flex justify-between items-center bg-slate-800/50 p-2.5 rounded-xl border border-slate-700/50">
+                        <span class="text-slate-400">平均單次咀嚼時間基線:</span>
+                        <span id="base-chew-sec" class="font-mono font-bold text-emerald-400">0.85 秒</span>
+                    </div>
+                    <div class="flex justify-between items-center bg-slate-800/50 p-2.5 rounded-xl border border-slate-700/50">
+                        <span class="text-slate-400">平均吞嚥停頓時間基线:</span>
+                        <span id="base-swallow-sec" class="font-mono font-bold text-emerald-400">1.10 秒</span>
+                    </div>
+                </div>
+
+                <div class="text-[11px] text-slate-500 italic bg-slate-950 p-2.5 rounded-xl border border-slate-800">
+                    💡 說明：前3餐套用臨床通用標準。系統將於個案完成第4餐起，自動根據個人歷史平均值 (μ ± σ) 更新其專屬基準。
+                </div>
+            </div>
+
+            <!-- 實時警報與異常事件串流列表 -->
+            <div class="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg flex-1 flex flex-col">
+                <h3 class="font-bold text-base text-slate-100 flex items-center space-x-2 mb-3">
+                    <span>⚡</span>
+                    <span>即時異常事件日誌 (Realtime Logs)</span>
+                </h3>
+
+                <div class="flex-1 overflow-y-auto max-h-64 space-y-2 pr-1" id="realtime-log-container">
+                    <div class="text-center py-8 text-xs text-slate-500 italic" id="empty-log-msg">
+                        目前尚無異常事件紀錄
+                    </div>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- 底部全寬區塊：歷史用餐場次與趨勢圖表 (佔 12 欄) -->
+        <section class="lg:col-span-12 bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
+            <h3 class="font-bold text-lg text-slate-100 flex items-center space-x-2">
+                <span>📈</span>
+                <span>個案歷史用餐品質與嗆咳趨勢分析</span>
+            </h3>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- 嗆咳與發呆次數統計圖表 -->
+                <div class="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                    <h4 class="text-xs font-semibold text-slate-400 mb-3">近7次用餐異常事件頻率</h4>
+                    <div class="h-48 relative">
+                        <canvas id="chart-anomalies"></canvas>
+                    </div>
+                </div>
+
+                <!-- 咀嚼速度趨勢圖表 -->
+                <div class="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                    <h4 class="text-xs font-semibold text-slate-400 mb-3">平均咀嚼耗時變化趨勢 (與基線對比)</h4>
+                    <div class="h-48 relative">
+                        <canvas id="chart-chew-trend"></canvas>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- 腳本引用 -->
+    <script src="config.js"></script>
+    <script src="caregiver.js"></script>
+</body>
+</html>
