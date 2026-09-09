@@ -1,7 +1,67 @@
-/**
- * 🛡️ 防哽咽即時監測系統 - 被照護者相機端 AI 引擎 (app.js)
- * 核心功能：MediaPipe (臉478點/手21點) + Web Audio (頻譜300-2500Hz) + 4階異常狀態機 + Supabase + WebRTC
- */
+// =============================================================================
+// 獨立核心偵測演算法模組 (Classes & Helper Functions)
+// =============================================================================
+class SilentChokeDetector {
+    constructor(holdSec = 3.0) {
+        this.hold = holdSec;
+        this.since = null;
+    }
+
+    update(mar, movementStd, audioEnergy, mouthOpenTh = 0.3, stillTh = 0.05, quietTh = 0.1) {
+        const cond = (mar > mouthOpenTh && movementStd < stillTh && audioEnergy < quietTh);
+        const now = performance.now() / 1000.0;
+        if (cond) {
+            if (this.since === null) {
+                this.since = now;
+            } else if (now - this.since >= this.hold) {
+                this.since = null;
+                return true;
+            }
+        } else {
+            this.since = null;
+        }
+        return false;
+    }
+}
+
+class EvidenceFusion {
+    constructor(windowSec = 5.0, threshold = 1.0, cooldownSec = 10.0) {
+        this.window = windowSec;
+        this.threshold = threshold;
+        this.cooldown = cooldownSec;
+        this.sources = {};
+        this.lastFire = -1e9;
+    }
+
+    observe(source, weight) {
+        if (weight > 0) {
+            this.sources[source] = { time: performance.now() / 1000.0, weight: weight };
+        }
+    }
+
+    score() {
+        const now = performance.now() / 1000.0;
+        let sum = 0.0;
+        const validSources = {};
+        for (const [src, data] of Object.entries(this.sources)) {
+            if (now - data.time <= this.window) {
+                validSources[src] = data;
+                sum += data.weight;
+            }
+        }
+        this.sources = validSources;
+        return sum;
+    }
+
+    check() {
+        const now = performance.now() / 1000.0;
+        if (this.score() >= this.threshold && (now - this.lastFire >= this.cooldown)) {
+            this.lastFire = now;
+            return true;
+        }
+        return false;
+    }
+}
 
 // 1. 全域變數與狀態
 let supabaseClient = null;
