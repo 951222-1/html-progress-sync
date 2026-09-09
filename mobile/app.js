@@ -70,6 +70,38 @@ let currentDiet = 'soft'; // regular, soft, pureed
 let isMealActive = false;
 let currentSessionId = null;
 
+// 原版防哽咽狀態機常數與狀態 (ST_IDLE, ST_INGEST, ST_CHEW, ST_SWALLOW, ST_CHECK)
+const ST_IDLE = "IDLE";
+const ST_INGEST = "INGEST";
+const ST_CHEW = "CHEW";
+const ST_SWALLOW = "SWALLOW";
+const ST_CHECK = "CHECK";
+
+let currentState = ST_IDLE;
+let stateStartTime = performance.now() / 1000.0;
+
+let prevJawY = null;
+let jawMovementHistory = []; // max len 30
+let marSmooth = null;
+let jawSmooth = null;
+
+let lastCoughTime = 0.0;
+let handOnNeckStartTime = null;
+let handOnNeckDuration = 0.0;
+let lastChokeAlertTime = 0.0;
+
+let prevNose = null;
+let noseSpeedHistory = []; // max len 30
+let lastChewFlipTime = 0.0;
+let coughFrameCounter = 0;
+let faceLostSince = null;
+
+let lastNose = null;
+let lastChin = null;
+let lastAnchorTs = 0.0;
+const ANCHOR_GRACE_SEC = 2.0;
+const FACE_LOST_ALERT_SEC = 3.0;
+
 // AI 與媒體串流變數
 let webcamVideo = null;
 let aiCanvas = null;
@@ -442,13 +474,14 @@ function setupAudioAnalyzer(stream) {
     }
 }
 
-// 7. 逐幀 AI 運算與 4 階異常判定主迴圈
+// 7. 逐幀 AI 運算與原版 5 階段狀態機與多模態決策樹
 let lastFrameTime = performance.now();
 async function processVideoFrame(now) {
     if (!isMealActive || !webcamVideo) return;
 
     const fps = 1000 / (now - lastFrameTime);
     lastFrameTime = now;
+    const currentTime = now / 1000.0;
 
     // 繪製視訊鏡頭畫面至 Canvas
     aiCtx.drawImage(webcamVideo, 0, 0, aiCanvas.width, aiCanvas.height);
@@ -477,128 +510,149 @@ async function processVideoFrame(now) {
     let faceLandmarks = (faceResults && faceResults.faceLandmarks && faceResults.faceLandmarks.length > 0) ? faceResults.faceLandmarks[0] : null;
     let handLandmarks = (handResults && handResults.landmarks && handResults.landmarks.length > 0) ? handResults.landmarks : [];
 
+    let movementStd = 0.0;
+    let mar = 0.0;
+    let visionCough = false;
+    let bodyShaking = false;
+    const w = aiCanvas.width;
+    const h = aiCanvas.height;
+
     if (faceLandmarks) {
-        // 取出下巴點 (#152) 與鼻尖點 (#1)
+        faceLostSince = null;
+
+        // 取出關鍵特徵點 (標號與原版 478 Mesh 對齊)
         const chin = faceLandmarks[152];
-        const nose = faceLandmarks[1];
+        const nose = faceLandmarks[4]; // 鼻尖 4
+        const p13 = faceLandmarks[13];
+        const p14 = faceLandmarks[14];
+        const p78 = faceLandmarks[78];
+        const p308 = faceLandmarks[308];
+        const p33 = faceLandmarks[33];
+        const p263 = faceLandmarks[263];
+
         const faceH = Math.abs(chin.y - nose.y);
 
+        // 1. MAR (Mouth Aspect Ratio) 計算與 EMA 平滑化 (0.4 * raw + 0.6 * smooth)
+        const vDist = Math.hypot((p13.x - p14.x) * w, (p13.y - p14.y) * h);
+        const hDist = Math.hypot((p78.x - p308.x) * w, (p78.y - p308.y) * h);
+        const marRaw = hDist > 0 ? (vDist / hDist) : 0.0;
+        marSmooth = (marSmooth === null) ? marRaw : (0.4 * marRaw + 0.6 * marSmooth);
+        mar = marSmooth;
+
+        // 2. 眼距歸一化縮放 (REF_IOD_PX = 100.0) & Jaw Movement
+        const iod = Math.hypot((p33.x - p263.x) * w, (p33.y - p263.y) * h);
+        const scale = iod > 1.0 ? (100.0 / iod) : 1.0;
+        const jawRaw = (chin.y - nose.y) * h * scale;
+        jawSmooth = (jawSmooth === null) ? jawRaw : (0.5 * jawRaw + 0.5 * jawSmooth);
+        const jawRelativeY = jawSmooth;
+
+        mealMetrics.jawVelocity = (prevJawY !== null) ? (jawRelativeY - prevJawY) : 0.0;
+        prevJawY = jawRelativeY;
+
+        jawMovementHistory.push(jawRelativeY);
+        if (jawMovementHistory.length > 30) jawMovementHistory.shift();
+
+        if (jawMovementHistory.length >= 15) {
+            const slice = jawMovementHistory.slice(-15);
+            const avg = slice.reduce((a,b)=>a+b, 0) / slice.length;
+            const variance = slice.reduce((a,b)=>a + Math.pow(b - avg, 2), 0) / slice.length;
+            movementStd = Math.sqrt(variance);
+        }
+
+        // 快取錨點供低頭/臉短暫消失時手勢續用 (2.0s 快取)
+        lastNose = { x: nose.x, y: nose.y };
+        lastChin = { x: chin.x, y: chin.y };
+        lastAnchorTs = currentTime;
+
         // 獨立演算法 1: 手抓喉嚨手勢偵測 (handNearThroat)
-        isHandOnNeck = handNearThroat(handLandmarks, nose, chin, aiCanvas.width, aiCanvas.height, 0.6);
+        isHandOnNeck = handNearThroat(handLandmarks, nose, chin, w, h, 0.6);
 
-        // 🎯 繪製 MediaPipe 臉部 3D 骨架與特徵輪廓
-        drawFaceMeshSkeleton(aiCtx, faceLandmarks, aiCanvas.width, aiCanvas.height);
-
-        // 🎯 繪製 MediaPipe 手部 21 關節骨架連線
-        if (handLandmarks && handLandmarks.length > 0) {
-            drawHandSkeleton(aiCtx, handLandmarks, aiCanvas.width, aiCanvas.height, isHandOnNeck);
-        }
-
-        // 1. 計算下巴歸一化移動速度 (Jaw Velocity)
-        if (mealMetrics.lastJawY !== null) {
-            const deltaY = chin.y - mealMetrics.lastJawY;
-            mealMetrics.jawVelocity = Math.abs((deltaY / faceH) * fps);
-        }
-        mealMetrics.lastJawY = chin.y;
-        document.getElementById('hud-jaw-vel').innerText = mealMetrics.jawVelocity.toFixed(2);
-
-        // 2. 計算 Mouth Aspect Ratio (MAR)
-        const upperLip = faceLandmarks[13];
-        const lowerLip = faceLandmarks[14];
-        const leftLip = faceLandmarks[61];
-        const rightLip = faceLandmarks[291];
-        const mar = Math.abs(upperLip.y - lowerLip.y) / Math.abs(leftLip.x - rightLip.x);
-
-        // 3. 咀嚼與物理吞嚥狀態機 (100% 依據實測基準數據)
-        // 基準: MAR_chew 0.04-0.11 | 單次咀嚼耗時 0.68-1.03s | 物理吞嚥停頓 0.8-1.3s
-        const hudActionState = document.getElementById('hud-action-state');
-        const hudActionDot = document.getElementById('hud-action-dot');
-
-        const isJawMoving = (mealMetrics.jawVelocity > 0.4) || (mar >= 0.04);
-
-        if (isJawMoving) {
-            // 👄 狀態 A: 咀嚼中 (Jaw 處於運動狀態)
-            if (!mealMetrics.chewStartTime) mealMetrics.chewStartTime = now;
-            mealMetrics.jawStillTime = 0.0; // 發呆/吞嚥停頓計時歸零
-            mealMetrics.hasSwallowedThisPause = false;
-
-            // 依據實測數據: 每耗時 ~0.68s ~ 1.03s 算為 1 次咀嚼
-            const currentChewDur = (now - mealMetrics.chewStartTime) / 1000;
-            if (currentChewDur >= 0.68) {
-                mealMetrics.totalChews++;
-                mealMetrics.currentBiteChews++;
-                mealMetrics.chewDurations.push(currentChewDur);
-                mealMetrics.chewStartTime = now; // 重設下一下時間
-                document.getElementById('hud-chews').innerText = `${mealMetrics.totalChews} 次`;
-            }
-
-            if (hudActionState) {
-                hudActionState.innerText = `👄 咀嚼中 (一口已咬 ${mealMetrics.currentBiteChews} 次 | 速度: ${mealMetrics.jawVelocity.toFixed(1)})`;
-                hudActionState.className = 'font-bold text-xs text-emerald-300';
-            }
-            if (hudActionDot) hudActionDot.className = 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse';
-
+        // 影像嗆咳跡象 (連續 3 幀確認)
+        if (movementStd > 15.0 && Math.abs(mealMetrics.jawVelocity) > 8.0) {
+            coughFrameCounter++;
         } else {
-            // 👄 狀態 B: 下巴靜止中 (靜止時間累積)
-            mealMetrics.jawStillTime += (1 / fps);
-            mealMetrics.chewStartTime = null;
+            coughFrameCounter = 0;
+        }
+        if (coughFrameCounter >= 3) {
+            coughFrameCounter = 0;
+            visionCough = true;
+        }
 
-            // 💧 物理吞嚥動作判定 (實測基準: 物理吞嚥停頓 0.8 秒 ~ 1.3 秒)
-            if (mealMetrics.jawStillTime >= 0.8 && mealMetrics.jawStillTime <= 1.3 && !mealMetrics.hasSwallowedThisPause) {
-                mealMetrics.hasSwallowedThisPause = true;
+        // 身體無因次化劇烈晃動 (Scale-Invariant Shaking)
+        const faceSize = Math.hypot((nose.x - chin.x) * w, (nose.y - chin.y) * h);
+        if (prevNose && faceSize > 0.001) {
+            const normDisp = Math.hypot((nose.x - prevNose.x) * w, (nose.y - prevNose.y) * h) / faceSize;
+            noseSpeedHistory.push(normDisp);
+            if (noseSpeedHistory.length > 30) noseSpeedHistory.shift();
+            const sumSpeed = noseSpeedHistory.reduce((a,b)=>a+b, 0);
+            if (sumSpeed > 1.5) bodyShaking = true;
+        }
+        prevNose = { x: nose.x, y: nose.y };
+
+        // ------------------------------------------------------------------
+        // 🧠 原版五階段進食狀態機 (ST_IDLE, ST_INGEST, ST_CHEW, ST_SWALLOW, ST_CHECK)
+        // ------------------------------------------------------------------
+        if (currentState === ST_IDLE) {
+            if (mar > 0.15) {
+                currentState = ST_INGEST;
+                stateStartTime = currentTime;
+                mealMetrics.currentBiteChews = 0;
+                console.log("【通知】偵測到張嘴:食物入口 🍛");
+            }
+        } else if (currentState === ST_INGEST) {
+            if (mar < 0.06) {
+                currentState = ST_CHEW;
+                stateStartTime = currentTime;
+                console.log("【通知】開始閉嘴咀嚼食物 🦷");
+            }
+        } else if (currentState === ST_CHEW) {
+            // 方向反轉咀嚼計數 (d1 * d2 < 0 且 間隔 > 0.18s)
+            if (movementStd > 2.0 && Math.abs(mealMetrics.jawVelocity) > 1.5) {
+                if (jawMovementHistory.length >= 3) {
+                    const d1 = jawMovementHistory[jawMovementHistory.length - 1] - jawMovementHistory[jawMovementHistory.length - 2];
+                    const d2 = jawMovementHistory[jawMovementHistory.length - 2] - jawMovementHistory[jawMovementHistory.length - 3];
+                    if (d1 * d2 < 0 && (currentTime - lastChewFlipTime) > 0.18) {
+                        mealMetrics.totalChews += 0.5;
+                        mealMetrics.currentBiteChews += 0.5;
+                        lastChewFlipTime = currentTime;
+                    }
+                }
+            }
+
+            if (visionCough) {
+                stateStartTime = currentTime;
+            } else if (movementStd < 0.8 && jawMovementHistory.length >= 15) {
+                currentState = ST_SWALLOW;
+                stateStartTime = currentTime;
+                console.log("【通知】咀嚼停止，下巴上提 (定格吞嚥中...)");
+            } else if ((currentTime - stateStartTime) > 4.0) {
+                const warnMsg = "⚠️【哽噎預警】咀嚼超過 4 秒仍未吞嚥，請注意！";
+                console.warn(warnMsg);
+                triggerAlertLevel('L2', warnMsg);
+                stateStartTime = currentTime; // 重置避免連續洗版
+            }
+        } else if (currentState === ST_SWALLOW) {
+            if ((currentTime - stateStartTime) > 0.6) {
+                currentState = ST_CHECK;
+                stateStartTime = currentTime;
                 mealMetrics.swallowCount = (mealMetrics.swallowCount || 0) + 1;
-                mealMetrics.currentBiteChews = 0; // 成功吞嚥，當前一口咀嚼數重置
-
-                // 更新 HUD 吞嚥次數
-                const hudSwallows = document.getElementById('hud-swallows');
-                if (hudSwallows) hudSwallows.innerText = `${mealMetrics.swallowCount} 次`;
-
-                if (hudActionState) {
-                    hudActionState.innerText = `💧 ✨ 物理吞嚥成功！(第 ${mealMetrics.swallowCount} 口，停頓 ${mealMetrics.jawStillTime.toFixed(1)}s)`;
-                    hudActionState.className = 'font-bold text-xs text-blue-300';
-                }
-                if (hudActionDot) hudActionDot.className = 'w-2.5 h-2.5 rounded-full bg-blue-400 animate-bounce';
-
-                // 播放柔和吞嚥雙重音
+                console.log(`🎉【數據分析】吞嚥成功！本次咀嚼約 ${Math.floor(mealMetrics.currentBiteChews)} 次。進入安全期。`);
                 playSwallowChimeSound();
-
-            } else if (mealMetrics.jawStillTime > 1.3 && mealMetrics.jawStillTime < CONFIG.BASELINES.POUCHING_HINT_SEC) {
-                // 🟡 狀態 C: 吞嚥完畢或停頓等待中
-                if (hudActionState) {
-                    hudActionState.innerText = `🟡 靜止等待中 (${mealMetrics.jawStillTime.toFixed(1)}s)...`;
-                    hudActionState.className = 'font-bold text-xs text-amber-300';
-                }
-                if (hudActionDot) hudActionDot.className = 'w-2.5 h-2.5 rounded-full bg-amber-400';
+            } else if (movementStd > 2.0) {
+                currentState = ST_CHEW;
+                console.log("【狀態回退】非吞嚥，恢復咀嚼。");
+            }
+        } else if (currentState === ST_CHECK) {
+            if ((currentTime - stateStartTime) > 4.0) {
+                console.log("💖【數據分析】安全通過進食觀察期。");
+                currentState = ST_IDLE;
             }
         }
 
-        // 4. 繪製自適應粉紅喉嚨圈 (R = 0.6 * Face Height)
-        const throatX = chin.x * aiCanvas.width;
-        const throatY = (chin.y + faceH * 0.4) * aiCanvas.height;
-        const throatR = faceH * 0.6 * 0.45 * aiCanvas.height;
-
-        aiCtx.strokeStyle = isHandOnNeck ? '#f43f5e' : '#f472b6';
-        aiCtx.lineWidth = isHandOnNeck ? 4 : 2;
-        aiCtx.beginPath();
-        aiCtx.arc(throatX, throatY, throatR, 0, Math.PI * 2);
-        aiCtx.stroke();
-
-        if (isHandOnNeck) {
-            evidenceFusion.observe("hand_throat", 0.6);
-        }
-
-        // 獨立演算法 2: 身體無因次化劇烈晃動計算 (calculateBodyShaking)
-        noseHistory.push({ x: nose.x * aiCanvas.width, y: nose.y * aiCanvas.height });
-        if (noseHistory.length > 30) noseHistory.shift();
-        const bodyShaking = calculateBodyShaking(noseHistory, faceH * aiCanvas.height);
-        if (bodyShaking > 0.3) {
-            evidenceFusion.observe("body_shaking", 0.5);
-        }
-
-        // 獨立演算法 5: 嘴唇藍光比率與發紺缺氧分析 (Cyanosis Detection)
+        // 獨立演算法: 嘴唇發紺分析
         try {
-            const lipPx = Math.floor(((upperLip.x + lowerLip.x) / 2) * aiCanvas.width);
-            const lipPy = Math.floor(((upperLip.y + lowerLip.y) / 2) * aiCanvas.height);
+            const lipPx = Math.floor(((p13.x + p14.x) / 2) * w);
+            const lipPy = Math.floor(((p13.y + p14.y) / 2) * h);
             const lipData = aiCtx.getImageData(lipPx, lipPy, 1, 1).data;
             const lipRGB = [lipData[0], lipData[1], lipData[2]];
             const bRatio = blueness(lipRGB);
@@ -609,44 +663,88 @@ async function processVideoFrame(now) {
                 hudCyanosis.innerText = `${bRatio.toFixed(2)} ${cyanotic ? '(發紺缺氧!)' : '(正常)'}`;
                 hudCyanosis.className = cyanotic ? 'font-mono text-purple-400 font-bold animate-pulse' : 'font-mono text-emerald-400 font-bold';
             }
-            if (cyanotic) {
-                evidenceFusion.observe("cyanosis", 0.4);
-            }
+            if (cyanotic) evidenceFusion.observe("cyanosis", 0.7);
         } catch (e) {}
 
-        // 獨立演算法 3: 無聲窒息偵測 (SilentChokeDetector)
-        const isSilentChoke = silentChokeDetector.update(mar, bodyShaking, audioEnergy, 0.3, 0.05, 0.1);
-        if (isSilentChoke) {
-            evidenceFusion.observe("silent_choke", 0.7);
-            triggerAlertLevel('L4', '🚨 無聲窒息警報！連續3秒符合張嘴無聲且靜止特徵');
+        // S1. 無聲窒息偵測
+        if (silentChokeDetector.update(mar, movementStd, audioEnergy, 0.15, 0.8, 0.02)) {
+            triggerAlertLevel('L4', '【緊急】疑似無聲窒息！嘴張開、靜止且無聲音持續，請立即確認呼吸道！');
         }
 
-        // ------------------------------------------------------------------
-        // 🚨 4 階異常狀態機與多模態證據融合 (Evidence Fusion) 判定矩陣
-        // ------------------------------------------------------------------
-
-        // 獨立演算法 4: 證據融合分數計算與觸發 (Evidence Fusion Score)
-        const fusionScore = evidenceFusion.score();
-        const hudFusion = document.getElementById('hud-fusion-score');
-        if (hudFusion) {
-            hudFusion.innerText = `${fusionScore.toFixed(2)} / 1.0`;
-        }
+        // S3. 多模態證據融合
+        evidenceFusion.observe("audio", (audioEnergy * 2.0));
+        if (isHandOnNeck) evidenceFusion.observe("gesture", 0.6);
+        if (mar > 0.15 && movementStd < 0.8) evidenceFusion.observe("still_open", 0.3);
 
         if (evidenceFusion.check()) {
-            triggerAlertLevel('L4', '🚨 多模態證據融合超標 (分數 >= 1.0) 觸發緊急窒息警報！');
+            triggerAlertLevel('L4', '【緊急・多模態】綜合證據(聲音/手勢/嘴開靜止)達警戒，高度疑似窒息！');
         }
-        // Level 4: 急劇嗆咳爆發警報 (Jaw Velocity >= 25.0 AND Audio Energy >= 0.18 OR Hands on neck)
-        else if (mealMetrics.jawVelocity >= CONFIG.BASELINES.JAW_VELOCITY_CHOKE_THRESH && (audioEnergy >= CONFIG.BASELINES.AUDIO_BURST_THRESH || isHandOnNeck)) {
-            triggerAlertLevel('L4', '🚨 急劇嗆咳爆發！偵測到下巴極速痙攣與聲學爆發');
+
+        // 🎯 繪製原版 Detection Overlay (嘴部紅圈、關鍵特徵點、Throat Zone 紫色圈、大字提示)
+        drawOriginalDetectionOverlay(aiCtx, faceLandmarks, handLandmarks, w, h, currentState, mar, movementStd, mealMetrics.totalChews, isHandOnNeck);
+
+    } else {
+        // 人臉遺失快取處理 (2.0 秒錨點快取手勢)
+        if (lastNose && (currentTime - lastAnchorTs) < ANCHOR_GRACE_SEC) {
+            isHandOnNeck = handNearThroat(handLandmarks, lastNose, lastChin, w, h, 0.6);
+        } else {
+            isHandOnNeck = false;
         }
-        // Level 3: 吞嚥前少咀嚼風險 (普通/軟食咀嚼少於 7 次即吞嚥 且 手扶頸部)
-        else if (currentDiet !== 'pureed' && mealMetrics.currentBiteChews > 0 && mealMetrics.currentBiteChews < CONFIG.BASELINES.PREMATURE_SWALLOW_MIN_CHEW && mealMetrics.jawStillTime > 1.0 && isHandOnNeck) {
-            triggerAlertLevel('L3', '⚠️ 咀嚼極度不充分！軟食/普通餐少於 7 下即試圖吞嚥');
+        prevNose = null;
+        noseSpeedHistory = [];
+        coughFrameCounter = 0;
+
+        if (isMealActive && (currentState === ST_INGEST || currentState === ST_CHEW || currentState === ST_SWALLOW)) {
+            if (faceLostSince === null) {
+                faceLostSince = currentTime;
+            } else if (currentTime - faceLostSince > FACE_LOST_ALERT_SEC) {
+                triggerAlertLevel('L3', '⚠️【異常警報】進食過程中人臉消失，請確認個案狀況！');
+                faceLostSince = currentTime;
+            }
         }
-        // Level 2: 20~30秒 嚴重發呆/卡喉警報
-        else if (mealMetrics.jawStillTime >= CONFIG.BASELINES.POUCHING_ALARM_SEC) {
-            triggerAlertLevel('L2', '🔴 靜止超過 20 秒！疑似嚴重含飯發呆或卡喉');
+
+        // 繪製 NO FACE DETECTED
+        drawOriginalDetectionOverlay(aiCtx, null, handLandmarks, w, h, currentState, 0, 0, mealMetrics.totalChews, isHandOnNeck);
+    }
+
+    // ------------------------------------------------------------------
+    // 🚨 哽噎與嗆咳決策判斷樹 (Choke & Cough Decision Logic)
+    // ------------------------------------------------------------------
+    if (isHandOnNeck) {
+        if (handOnNeckStartTime === null) handOnNeckStartTime = currentTime;
+        handOnNeckDuration = currentTime - handOnNeckStartTime;
+    } else {
+        handOnNeckStartTime = null;
+        handOnNeckDuration = 0.0;
+    }
+
+    let coughDetectedThisFrame = visionCough;
+    if (audioEnergy > 0.15) coughDetectedThisFrame = true;
+    if (coughDetectedThisFrame) lastCoughTime = currentTime;
+
+    const chokeCondA = (handOnNeckDuration >= 5.0 && (currentTime - lastCoughTime <= 5.0));
+    const chokeCondB = (handOnNeckDuration >= 1.0 && bodyShaking);
+
+    if (chokeCondA || chokeCondB) {
+        if (currentTime - lastChokeAlertTime >= 10.0) {
+            lastChokeAlertTime = currentTime;
+            const gmsg = chokeCondB
+                ? '🚨【緊急・哽噎警報】手部抓握喉嚨且身體劇烈掙扎（前傾/左右掙扎），判定為哽噎！請立即前往協助！'
+                : '🚨【緊急・哽噎警報】手部抓握喉嚨持續 5 秒且伴隨咳嗽，判定為哽噎！請立即前往協助！';
+            triggerAlertLevel('L4', gmsg);
+            handOnNeckStartTime = null;
+            handOnNeckDuration = 0.0;
         }
+    } else if (coughDetectedThisFrame && bodyShaking) {
+        triggerAlertLevel('L4', '🚨【緊急・劇烈嗆咳警報】偵測到嗆咳且身體劇烈晃動掙扎（前傾/左右掙扎）！');
+    } else if (visionCough && audioEnergy > 0.15) {
+        triggerAlertLevel('L4', '🚨【雙重確認嗆咳警報】影像+聲音同時偵測到嗆咳！');
+    } else if (visionCough) {
+        triggerAlertLevel('L3', '⚠️【嗆咳警報】影像偵測到劇烈晃動(影像嗆咳)，請留意狀況。');
+    }
+
+    // 更新 HUD 即時資訊
+    updateHudStats(currentState, mar, movementStd, mealMetrics.totalChews, mealMetrics.swallowCount || 0, mealMetrics.jawVelocity, evidenceFusion.score());
         // Level 1: 10秒 含飯發呆溫和提醒
         else if (mealMetrics.jawStillTime >= CONFIG.BASELINES.POUCHING_HINT_SEC && mealMetrics.jawStillTime < (CONFIG.BASELINES.POUCHING_HINT_SEC + 0.5)) {
             triggerAlertLevel('L1', '🟡 含飯/發呆提醒：長者已靜止 10 秒未咀嚼');
@@ -1047,6 +1145,132 @@ function drawHandSkeleton(ctx, handLandmarksList, w, h, isHandOnNeck = false) {
             ctx.arc(px, py, 3, 0, Math.PI * 2);
             ctx.fill();
             ctx.stroke();
+        }
+    }
+}
+
+// =============================================================================
+// 原版 UI Overlay 與 HUD 視覺繪製 Helper Functions
+// =============================================================================
+
+function updateHudStats(stateStr, marVal, jawStdVal, chewCnt, swallowCnt, jawVelVal, fusionScore) {
+    const elState = document.getElementById('hud-state');
+    if (elState) {
+        elState.innerText = stateStr;
+        if (stateStr === 'CHEW') elState.className = 'font-bold text-emerald-300 animate-pulse';
+        else if (stateStr === 'SWALLOW') elState.className = 'font-bold text-blue-300 animate-bounce';
+        else if (stateStr === 'INGEST') elState.className = 'font-bold text-amber-300';
+        else elState.className = 'font-bold text-slate-300';
+    }
+
+    const elMar = document.getElementById('hud-mar');
+    if (elMar) elMar.innerText = marVal.toFixed(2);
+
+    const elJawStd = document.getElementById('hud-jaw-std');
+    if (elJawStd) elJawStd.innerText = jawStdVal.toFixed(2);
+
+    const elChews = document.getElementById('hud-chews');
+    if (elChews) elChews.innerText = `${Math.floor(chewCnt)} 次`;
+
+    const elSwallows = document.getElementById('hud-swallows');
+    if (elSwallows) elSwallows.innerText = `${swallowCnt} 次`;
+
+    const elJawVel = document.getElementById('hud-jaw-vel');
+    if (elJawVel) elJawVel.innerText = jawVelVal.toFixed(2);
+
+    const elFusion = document.getElementById('hud-fusion-score');
+    if (elFusion) elFusion.innerText = `${fusionScore.toFixed(2)} / 1.0`;
+}
+
+function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, stateStr, marVal, jawStdVal, chewCnt, isHandOnNeck) {
+    if (landmarks) {
+        const chin = landmarks[152];
+        const nose = landmarks[4];
+        const p13 = landmarks[13];
+        const p14 = landmarks[14];
+        const p78 = landmarks[78];
+        const p308 = landmarks[308];
+        const faceH = Math.abs(chin.y - nose.y);
+
+        // 1. 繪製嘴部外圈紅線輪廓
+        const outerIdx = [61, 185, 40, 39, 37, 0, 267, 269, 270, 409, 291, 375, 321, 405, 314, 17, 84, 181, 91, 146];
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        for (let i = 0; i < outerIdx.length; i++) {
+            const pt = landmarks[outerIdx[i]];
+            if (i === 0) ctx.moveTo(pt.x * w, pt.y * h);
+            else ctx.lineTo(pt.x * w, pt.y * h);
+        }
+        ctx.closePath();
+        ctx.stroke();
+
+        // 2. 繪製關鍵特徵點 (綠點: 13, 14, 78, 308, 4, 152)
+        const greenDots = [13, 14, 78, 308, 4, 152];
+        ctx.fillStyle = '#22c55e';
+        for (const idx of greenDots) {
+            const pt = landmarks[idx];
+            if (!pt) continue;
+            ctx.beginPath();
+            ctx.arc(pt.x * w, pt.y * h, 4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+
+        // 藍色上下唇連線 (#13 to #14)
+        ctx.strokeStyle = '#3b82f6';
+        ctx.lineWidth = 1.5;
+        ctx.beginPath();
+        ctx.moveTo(p13.x * w, p13.y * h);
+        ctx.lineTo(p14.x * w, p14.y * h);
+        ctx.stroke();
+
+        // 紅色臉部縱向主軸 (#4 to #152)
+        ctx.strokeStyle = '#ef4444';
+        ctx.lineWidth = 2.0;
+        ctx.beginPath();
+        ctx.moveTo(nose.x * w, nose.y * h);
+        ctx.lineTo(chin.x * w, chin.y * h);
+        ctx.stroke();
+
+        // 3. 繪製 Throat Zone (喉嚨自適應圈圈)
+        const throatX = (chin.x + 0.6 * (chin.x - nose.x)) * w;
+        const throatY = (chin.y + 0.6 * (chin.y - nose.y)) * h;
+        const throatR = Math.max(faceH * 0.6 * w, 12.0);
+
+        ctx.strokeStyle = isHandOnNeck ? '#f43f5e' : '#d946ef';
+        ctx.lineWidth = isHandOnNeck ? 4.0 : 2.0;
+        ctx.beginPath();
+        ctx.arc(throatX, throatY, throatR, 0, Math.PI * 2);
+        ctx.stroke();
+
+        ctx.fillStyle = isHandOnNeck ? '#f43f5e' : '#d946ef';
+        ctx.beginPath();
+        ctx.arc(throatX, throatY, 4, 0, Math.PI * 2);
+        ctx.fill();
+
+        ctx.font = 'bold 12px sans-serif';
+        ctx.fillText('Throat Zone', throatX - 35, throatY - throatR - 6);
+
+        // 4. 繪製手部 21 關節骨架
+        if (handLandmarks && handLandmarks.length > 0) {
+            drawHandSkeleton(ctx, handLandmarks, w, h, isHandOnNeck);
+        }
+
+        // 5. 吞嚥狀態大字提示 (SWALLOWING...)
+        if (stateStr === 'SWALLOW') {
+            ctx.fillStyle = '#ef4444';
+            ctx.font = 'bold 28px sans-serif';
+            ctx.fillText('SWALLOWING...', 20, h - 30);
+        }
+
+    } else {
+        // 人臉遺失大字提示 (NO FACE DETECTED)
+        ctx.fillStyle = '#ef4444';
+        ctx.font = 'bold 24px sans-serif';
+        ctx.fillText('NO FACE DETECTED', w * 0.25, h * 0.5);
+
+        if (handLandmarks && handLandmarks.length > 0) {
+            drawHandSkeleton(ctx, handLandmarks, w, h, isHandOnNeck);
         }
     }
 }
