@@ -1,0 +1,98 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>#0005 防哽咽即時監測系統 —— 獨立核心偵測演算法模組 (5大演算法) JavaScript 完整移植報告</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; line-height: 1.6; max-width: 920px; margin: 30px auto; padding: 20px; color: #0f172a; background-color: #f8fafc; }
+        h1 { color: #1e3a8a; border-bottom: 3px solid #3b82f6; padding-bottom: 12px; font-size: 1.85rem; }
+        h2 { color: #1e40af; margin-top: 28px; border-bottom: 1px solid #cbd5e1; padding-bottom: 6px; font-size: 1.35rem; }
+        .meta-box { background: #ffffff; border: 1px solid #e2e8f0; padding: 20px; border-radius: 12px; margin-bottom: 25px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); }
+        .meta-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px; font-size: 0.95em; }
+        .badge { background: #10b981; color: white; padding: 4px 12px; border-radius: 6px; font-weight: bold; font-size: 0.85em; display: inline-block; }
+        .card { background: #ffffff; border: 1px solid #e2e8f0; padding: 18px; border-radius: 10px; margin-bottom: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.05); }
+        code { background: #f1f5f9; color: #0f172a; padding: 2px 6px; border-radius: 4px; font-family: "JetBrains Mono", Consolas, monospace; font-size: 0.9em; }
+        table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 0.92em; }
+        th, td { border: 1px solid #cbd5e1; padding: 10px 14px; text-align: left; }
+        th { background-color: #f1f5f9; color: #1e293b; font-weight: 700; }
+        ul { padding-left: 22px; }
+        li { margin-bottom: 8px; }
+        .alert-l4 { background-color: #fef2f2; border-left: 5px solid #ef4444; padding: 12px 16px; margin-bottom: 10px; border-radius: 4px; }
+        .tag-pill { background: #e0e7ff; color: #3730a3; padding: 2px 8px; border-radius: 12px; font-size: 0.82em; font-weight: 600; }
+    </style>
+</head>
+<body>
+
+    <h1>🛡️ 防哽咽即時監測系統 —— 獨立核心偵測演算法模組 JavaScript 移植報告 (#0005)</h1>
+    
+    <div class="meta-box">
+        <div class="meta-grid">
+            <div><strong>檔案序號 (ID)：</strong> <code>0005</code></div>
+            <div><strong>任務標題：</strong> 獨立核心偵測演算法模組 (5大演算法) 移植與多模態融合</div>
+            <div><strong>執行 AI：</strong> Antigravity AI Agent</div>
+            <div><strong>任務狀態：</strong> <span class="badge">COMPLETED</span></div>
+            <div><strong>同步時間：</strong> 2026-09-09T09:46:00Z</div>
+            <div><strong>適用環境：</strong> 純前端 Web AI (MediaPipe + Web Audio + Canvas Context)</div>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>🧠 一、5 大獨立演算法模組 100% 移植對照表</h2>
+        <div class="card">
+            <table>
+                <thead>
+                    <tr>
+                        <th>演算法模組</th>
+                        <th>Python 原始函數/類別</th>
+                        <th>JavaScript 移植實作與 HUD 反饋</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td><strong>1. 手抓喉嚨手勢</strong></td>
+                        <td><code>estimate_throat</code> & <code>hand_near_throat</code></td>
+                        <td>以 $0.6 \times \text{臉高}$ 自適應喉嚨圈，檢測手部 21 關鍵點是否進入。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>2. 身體晃動與 MAR</strong></td>
+                        <td><code>calculate_mar</code> & <code>calculate_body_shaking</code></td>
+                        <td>計算嘴巴開合比率 MAR 與鼻尖 30 幀歷史無因次化晃動位移量。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>3. 無聲窒息偵測</strong></td>
+                        <td><code>SilentChokeDetector</code> 類別</td>
+                        <td>連續 3.0 秒符合「張嘴 ($MAR > 0.3$) + 身體靜止 + 聲音安靜」自動觸發警報。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>4. 多模態證據融合</strong></td>
+                        <td><code>EvidenceFusion</code> 類別</td>
+                        <td>滑動時間窗 (5s) 收集加權分數 (手勢 0.6、無聲 0.7、缺氧 0.4)，達 1.0 觸發。</td>
+                    </tr>
+                    <tr>
+                        <td><strong>5. 嘴唇發紺缺氧</strong></td>
+                        <td><code>blueness</code> & <code>is_cyanotic</code></td>
+                        <td>Canvas 實時抽取嘴唇 RGB 計算藍光比率 $B / (R+G+B) \ge 0.38$ 判定發紺。</td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <div class="section">
+        <h2>📦 二、本次交付與修改檔案</h2>
+        <div class="card">
+            <ul>
+                <li>✅ <code>mobile_web/app.js</code>：100% 完整移植 5 大演算法類別與函數，並於 <code>processVideoFrame</code> 即時迴圈整合。</li>
+                <li>✅ <code>mobile_web/index.html</code>：HUD Overlay 新增「嘴唇藍光比 (發紺缺氧)」與「證據融合分數 (0.00/1.0)」顯示。</li>
+                <li>✅ <code>mobile_web/server.py</code>：自動開啟 HTTPS 安全通道運作中。</li>
+            </ul>
+        </div>
+    </div>
+
+    <div style="text-align: center; font-size: 0.85em; color: #64748b; margin-top: 30px;">
+        防哽咽即時監測系統 AI Agent 同步進度報告 • ID: 0005
+    </div>
+
+</body>
+</html>
