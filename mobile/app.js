@@ -958,7 +958,7 @@ function showAlertOverlay(level, msg) {
     const title = document.getElementById('alert-title');
     const desc = document.getElementById('alert-desc');
 
-    title.innerText = level === 'L4' ? '🚨 L4 急劇嗆咳爆發警報' : (level === 'L2' ? '🔴 L2 嚴重卡喉發呆警報' : '⚠️ L3 吞嚥前少咀嚼預警');
+    title.innerText = level === 'L4' ? '🚨 L4 急性哽噎緊急警報' : (level === 'L2' ? '🔴 L2 嚴重卡喉發呆警報' : '⚠️ L3 吞嚥前少咀嚼預警');
     desc.innerText = msg;
     overlay.classList.remove('hidden');
 }
@@ -1113,7 +1113,7 @@ function broadcastSystemState() {
                 totalSwallows: mealMetrics.swallowCount || 0,
                 jawVelocity: parseFloat(mealMetrics.jawVelocity.toFixed(2)),
                 pouchingEvents: mealMetrics.pouchingEvents,
-                coughEvents: mealMetrics.coughCountL2 + mealMetrics.chokingEventsL3,
+                coughEvents: (mealMetrics.coughCount || 0) + (mealMetrics.coughCountL2 || 0),
                 activeAlertLevel: activeAlertLevel,
                 isHandOnNeck: isHandOnNeck
             }
