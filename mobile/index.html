@@ -68,7 +68,11 @@
             </div>
 
             <!-- 實時狀態 HUD Overlay -->
-            <div class="absolute top-3 left-3 bg-slate-900/80 backdrop-blur px-3 py-1.5 rounded-xl border border-slate-700/60 text-[11px] space-y-0.5">
+            <div class="absolute top-3 left-3 bg-slate-900/80 backdrop-blur px-3 py-1.5 rounded-xl border border-slate-700/60 text-[11px] space-y-0.5 z-20">
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">進食狀態:</span>
+                    <span id="hud-state" class="font-bold text-amber-300">IDLE</span>
+                </div>
                 <div class="flex items-center space-x-2">
                     <span class="text-slate-400">AI 模型:</span>
                     <span id="hud-ai-status" class="font-bold text-amber-400">⏳ 載入中...</span>
@@ -84,6 +88,14 @@
                 <div class="flex items-center space-x-2">
                     <span class="text-slate-400">成功吞嚥:</span>
                     <span id="hud-swallows" class="font-mono font-bold text-blue-400 text-sm">0 次</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">MAR (嘴開比):</span>
+                    <span id="hud-mar" class="font-mono text-slate-200">0.00</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">Jaw Std (下巴差):</span>
+                    <span id="hud-jaw-std" class="font-mono text-slate-200">0.00</span>
                 </div>
                 <div class="flex items-center space-x-2">
                     <span class="text-slate-400">下巴速度:</span>
