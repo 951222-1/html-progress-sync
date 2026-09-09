@@ -1,0 +1,48 @@
+/* 🛡️ 防哽咽即時監測系統 - 客製化樣式表 */
+
+/* 自訂捲軸樣式 */
+::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+}
+
+::-webkit-scrollbar-track {
+    background: rgba(15, 23, 42, 0.6);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(51, 65, 85, 0.8);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(71, 85, 105, 1);
+}
+
+/* 質地選擇按鈕 Active 樣式 */
+.diet-btn.active {
+    background-color: #2563eb !important;
+    color: #ffffff !important;
+    border-color: #60a5fa !important;
+    box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
+}
+
+/* Canvas 相機畫面上方層級控制 */
+#ai-canvas {
+    transform: scaleX(-1); /* 水平翻轉以符合鏡頭自拍習慣 */
+}
+
+/* 警報跳窗閃爍動畫 */
+@keyframes alertPulse {
+    0%, 100% {
+        background-color: rgba(225, 29, 72, 0.95);
+    }
+    50% {
+        background-color: rgba(159, 18, 57, 0.95);
+    }
+}
+
+.animate-alert-flash {
+    animation: alertPulse 0.6s infinite ease-in-out;
+}
