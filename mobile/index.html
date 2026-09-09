@@ -53,12 +53,12 @@
         </div>
 
         <!-- AI 相機 Viewport 與 Canvas 繪圖面板 -->
-        <div class="relative w-full aspect-[4/3] bg-black rounded-2xl overflow-hidden border-2 border-slate-800 shadow-2xl">
+        <div id="camera-container" class="relative w-full aspect-[3/4] sm:aspect-[4/3] bg-black rounded-2xl overflow-hidden border-2 border-slate-800 shadow-2xl transition-all duration-300">
             <!-- 隱藏式 Video 標籤用於擷取 WebCam -->
             <video id="webcam-video" class="hidden" playsinline muted></video>
             
             <!-- Canvas 用於繪製即時骨架、粉紅喉嚨圈與下巴波形 -->
-            <canvas id="ai-canvas" class="w-full h-full object-cover"></canvas>
+            <canvas id="ai-canvas" class="w-full h-full object-contain"></canvas>
 
             <!-- MediaPipe 載入提示層 (預設隱藏，不再卡住畫面) -->
             <div id="loading-overlay" class="absolute inset-0 bg-slate-950/90 backdrop-blur hidden flex flex-col items-center justify-center p-6 text-center space-y-3 z-30">
