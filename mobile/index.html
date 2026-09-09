@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
     <title>防哽咽 AI 即時監測 —— 被照護者相機端</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
@@ -17,47 +20,68 @@
         window.HandLandmarker = vision.HandLandmarker;
     </script>
     <link rel="stylesheet" href="style.css">
-    <!-- 全域先行函數定義 (保證在按鈕渲染或點擊前 loginAsPatient 絕對就緒) -->
+    <!-- 🛡️ 全域優先同步定義 (不依賴任何外部檔案載入時序，開箱即用) -->
     <script>
         window.currentPatient = window.currentPatient || { id: null, patient_code: 'P001', full_name: '王爺爺 (軟食)', diet_type: 'soft', baseline_chew: 0.85, baseline_swallow: 1.10 };
         window.currentDiet = window.currentDiet || 'soft';
 
-        window.openLoginModal = window.openLoginModal || function() {
-            const m = document.getElementById('login-modal');
-            if (m) m.classList.remove('hidden');
-        };
+        function openLoginModal() {
+            var m = document.getElementById('login-modal');
+            if (m) {
+                m.style.display = 'flex';
+                m.classList.remove('hidden');
+            }
+        }
 
-        window.closeLoginModal = window.closeLoginModal || function() {
-            const m = document.getElementById('login-modal');
-            if (m) m.classList.add('hidden');
-        };
+        function closeLoginModal() {
+            var m = document.getElementById('login-modal');
+            if (m) {
+                m.style.display = 'none';
+                m.classList.add('hidden');
+            }
+        }
 
-        window.selectDiet = window.selectDiet || function(dietKey) {
+        function selectDiet(dietKey) {
             window.currentDiet = dietKey;
-            document.querySelectorAll('.diet-btn').forEach(btn => btn.classList.remove('active', 'bg-blue-600', 'text-white'));
-            const activeBtn = document.getElementById('btn-diet-' + dietKey);
+            document.querySelectorAll('.diet-btn').forEach(function(btn) {
+                btn.classList.remove('active', 'bg-blue-600', 'text-white');
+            });
+            var activeBtn = document.getElementById('btn-diet-' + dietKey);
             if (activeBtn) activeBtn.classList.add('active', 'bg-blue-600', 'text-white');
-            const hud = document.getElementById('hud-diet');
+            var hud = document.getElementById('hud-diet');
             if (hud) hud.innerText = dietKey === 'regular' ? '普通餐食' : (dietKey === 'pureed' ? '碎食餐' : '軟食餐盒');
-        };
+        }
 
-        window.loginAsPatient = function(code, nameStr) {
-            console.log('[Login] Early/Direct loginAsPatient invoked:', code, nameStr);
+        function loginAsPatient(code, nameStr) {
+            console.log('[Login] Direct loginAsPatient executed:', code, nameStr);
             window._selectedPatient = { code: code, nameStr: nameStr };
-            window.closeLoginModal();
-            const label = document.getElementById('current-patient-label');
+            window.currentPatient.patient_code = code;
+            window.currentPatient.full_name = nameStr;
+            
+            // 立即關閉 Modal
+            closeLoginModal();
+            
+            // 更新 UI 標籤
+            var label = document.getElementById('current-patient-label');
             if (label) label.innerText = nameStr + ' (' + code + ')';
 
+            // 若完整 app.js 已就緒，委託啟動完整相機與 WebRTC
             if (typeof window._fullLoginAsPatient === 'function') {
                 window._fullLoginAsPatient(code, nameStr);
             } else if (typeof window.startMealSession === 'function') {
                 window.startMealSession().catch(function(e) { console.warn(e); });
             }
-        };
+        }
+
+        // 雙向掛載至 window
+        window.openLoginModal = openLoginModal;
+        window.closeLoginModal = closeLoginModal;
+        window.selectDiet = selectDiet;
+        window.loginAsPatient = loginAsPatient;
     </script>
     <!-- 核心設定與應用腳本引用 (置於 Head 提前解析) -->
-    <script src="config.js?v=20260909_v3"></script>
-    <script src="app.js?v=20260909_v3"></script>
+    <script src="config.js?v=20260909_v4"></script>
+    <script src="app.js?v=20260909_v4"></script>
 </head>
 <body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col justify-between select-none">
 
@@ -220,20 +244,37 @@
             </div>
             
             <div class="space-y-2">
-                <button onclick="loginAsPatient('P001', '王爺爺 (軟食)')" data-patient-code="P001" data-patient-name="王爺爺 (軟食)" class="patient-select-btn w-full bg-slate-800 hover:bg-slate-700 text-slate-200 p-3 rounded-2xl font-semibold text-left flex items-center justify-between border border-slate-700 transition">
-                    <span>👴 王爺爺 (P001)</span>
-                    <span class="text-xs text-blue-400">82歲 · 軟食</span>
+                <button type="button" onclick="window.loginAsPatient('P001', '王爺爺 (軟食)')" data-patient-code="P001" data-patient-name="王爺爺 (軟食)" style="cursor: pointer; pointer-events: auto;" class="patient-select-btn w-full bg-slate-800 hover:bg-slate-700 text-slate-200 p-3 rounded-2xl font-semibold text-left flex items-center justify-between border border-slate-700 transition">
+                    <span style="pointer-events: none;">👴 王爺爺 (P001)</span>
+                    <span style="pointer-events: none;" class="text-xs text-blue-400">82歲 · 軟食</span>
                 </button>
-                <button onclick="loginAsPatient('P002', '陳奶奶 (碎食)')" data-patient-code="P002" data-patient-name="陳奶奶 (碎食)" class="patient-select-btn w-full bg-slate-800 hover:bg-slate-700 text-slate-200 p-3 rounded-2xl font-semibold text-left flex items-center justify-between border border-slate-700 transition">
-                    <span>👵 陳奶奶 (P002)</span>
-                    <span class="text-xs text-blue-400">78歲 · 碎食</span>
+                <button type="button" onclick="window.loginAsPatient('P002', '陳奶奶 (碎食)')" data-patient-code="P002" data-patient-name="陳奶奶 (碎食)" style="cursor: pointer; pointer-events: auto;" class="patient-select-btn w-full bg-slate-800 hover:bg-slate-700 text-slate-200 p-3 rounded-2xl font-semibold text-left flex items-center justify-between border border-slate-700 transition">
+                    <span style="pointer-events: none;">👵 陳奶奶 (P002)</span>
+                    <span style="pointer-events: none;" class="text-xs text-blue-400">78歲 · 碎食</span>
                 </button>
-                <button onclick="loginAsPatient('P003', '林伯伯 (普通餐)')" data-patient-code="P003" data-patient-name="林伯伯 (普通餐)" class="patient-select-btn w-full bg-slate-800 hover:bg-slate-700 text-slate-200 p-3 rounded-2xl font-semibold text-left flex items-center justify-between border border-slate-700 transition">
-                    <span>👨 林伯伯 (P003)</span>
-                    <span class="text-xs text-blue-400">85歲 · 普通餐</span>
+                <button type="button" onclick="window.loginAsPatient('P003', '林伯伯 (普通餐)')" data-patient-code="P003" data-patient-name="林伯伯 (普通餐)" style="cursor: pointer; pointer-events: auto;" class="patient-select-btn w-full bg-slate-800 hover:bg-slate-700 text-slate-200 p-3 rounded-2xl font-semibold text-left flex items-center justify-between border border-slate-700 transition">
+                    <span style="pointer-events: none;">👨 林伯伯 (P003)</span>
+                    <span style="pointer-events: none;" class="text-xs text-blue-400">85歲 · 普通餐</span>
                 </button>
             </div>
         </div>
     </div>
+
+    <!-- 🎯 彈窗即時原生事件綁定 (第3重保險：即使所有 onclick 失效，此處保證直接監聽 DOM 點擊) -->
+    <script>
+        (function() {
+            var btns = document.querySelectorAll('.patient-select-btn');
+            for (var i = 0; i < btns.length; i++) {
+                (function(btn) {
+                    btn.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        var code = this.getAttribute('data-patient-code') || 'P001';
+                        var name = this.getAttribute('data-patient-name') || '王爺爺 (軟食)';
+                        window.loginAsPatient(code, name);
+                    });
+                })(btns[i]);
+            }
+        })();
+    </script>
 </body>
 </html>
