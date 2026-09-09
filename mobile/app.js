@@ -774,19 +774,10 @@ async function processVideoFrame(now) {
             if (cyanotic) evidenceFusion.observe("cyanosis", 0.7);
         } catch (e) {}
 
-        // S1. 無聲窒息偵測
-        if (silentChokeDetector.update(mar, movementStd, audioEnergy, 0.15, 0.8, 0.02)) {
-            triggerAlertLevel('L4', '【緊急】疑似無聲窒息！嘴張開、靜止且無聲音持續，請立即確認呼吸道！');
-        }
-
-        // S3. 多模態證據融合
+        // 僅保留證據紀錄分析，不單獨直接觸發 L4 警報
         evidenceFusion.observe("audio", (audioEnergy * 2.0));
         if (isHandOnNeck) evidenceFusion.observe("gesture", 0.6);
         if (mar > 0.15 && movementStd < 0.8) evidenceFusion.observe("still_open", 0.3);
-
-        if (evidenceFusion.check()) {
-            triggerAlertLevel('L4', '【緊急・多模態】綜合證據(聲音/手勢/嘴開靜止)達警戒，高度疑似窒息！');
-        }
 
         // 🎯 繪製原版 Detection Overlay (嘴部紅圈、關鍵特徵點、Throat Zone 紫色圈、Chest Zone、大字提示)
         drawOriginalDetectionOverlay(aiCtx, faceLandmarks, handLandmarks, w, h, currentState, mar, movementStd, mealMetrics.totalChews, isHandOnNeck, isHandOnChest, isBodyShakingContinuous, chokeSimultaneousDuration);
@@ -849,27 +840,12 @@ async function processVideoFrame(now) {
         }
     }
 
-    // 輔助哽噎判斷：手抓握喉嚨持續 5 秒且伴隨咳嗽
+    // 咳嗽狀態追蹤 (僅用於靜默後台紀錄)
     let coughDetectedThisFrame = visionCough;
     if (audioEnergy > 0.20) coughDetectedThisFrame = true;
     if (coughDetectedThisFrame) lastCoughTime = currentTime;
 
-    if (isHandOnNeck) {
-        if (handOnNeckStartTime === null) handOnNeckStartTime = currentTime;
-        handOnNeckDuration = currentTime - handOnNeckStartTime;
-    } else {
-        handOnNeckStartTime = null;
-        handOnNeckDuration = 0.0;
-    }
-
-    if (handOnNeckDuration >= 5.0 && (currentTime - lastCoughTime <= 5.0)) {
-        if (currentTime - lastChokeAlertTime >= 10.0) {
-            lastChokeAlertTime = currentTime;
-            triggerAlertLevel('L4', '🚨【緊急・哽噎警報】手部抓握喉嚨持續 5 秒且伴隨咳嗽，判定為哽噎！請立即前往協助！');
-            handOnNeckStartTime = null;
-            handOnNeckDuration = 0.0;
-        }
-    } else if (visionCough || audioEnergy > 0.25) {
+    if (visionCough || audioEnergy > 0.25) {
         // L1 / L2 合併為「嗆咳」 (靜默後台紀錄：取消劇烈晃動強制綁定，不跳 UI 彈窗、不閃紅橫幅)
         if (currentTime - (window._lastCoughLogTime || 0) >= 3.0) {
             window._lastCoughLogTime = currentTime;
@@ -1143,28 +1119,33 @@ function handNearChestOrThroat(hands, nose, chin, w, h) {
     }
     const faceV = Math.hypot((chin.x - nose.x) * w, (chin.y - nose.y) * h);
     
-    // 喉嚨圈 (半徑約 0.55 倍臉長)
+    // 喉嚨圈 (半徑約 0.50 倍臉長)
     const throat = estimateThroat(nose, chin, 0.5);
-    const throatR = Math.max(faceV * 0.55, 15.0);
+    const throatR = Math.max(faceV * 0.50, 15.0);
     
-    // 胸口區域 (從下巴往下延伸 1.35 倍臉長，半徑 1.1 倍臉長，範圍寬廣涵蓋長者拍胸、捶胸動作)
-    const chest = estimateChest(nose, chin, 1.35);
-    const chestR = Math.max(faceV * 1.1, 35.0);
+    // 胸口區域 (下巴往下延伸 1.25 倍臉長，半徑 0.85 倍臉長，覆蓋胸前拍胸區域)
+    const chest = estimateChest(nose, chin, 1.25);
+    const chestR = Math.max(faceV * 0.85, 30.0);
 
     let isThroat = false;
     let isChest = false;
 
     for (const hand of hands) {
+        let ptsInThroat = 0;
+        let ptsInChest = 0;
         for (const pt of hand) {
             const px = pt.x * w;
             const py = pt.y * h;
             
             const distThroat = Math.hypot(px - throat.x * w, py - throat.y * h);
-            if (distThroat < throatR) isThroat = true;
+            if (distThroat < throatR) ptsInThroat++;
 
             const distChest = Math.hypot(px - chest.x * w, py - chest.y * h);
-            if (distChest < chestR) isChest = true;
+            if (distChest < chestR) ptsInChest++;
         }
+        // 至少 2 個手部關節點進入感應圈，方視為有效撫胸/抓喉（排除單根指尖掠過誤判）
+        if (ptsInThroat >= 2) isThroat = true;
+        if (ptsInChest >= 2) isChest = true;
     }
     return {
         near: (isThroat || isChest),
@@ -1223,8 +1204,9 @@ function checkContinuousBodyShaking(nose, faceSize, currentTime, w, h) {
             totalSpeed += stepSpeed;
 
             if (i > 1) {
-                if (dx * prevDx < 0 && Math.abs(dx) > 1.5) xDirectionReversals++;
-                if (dy * prevDy < 0 && Math.abs(dy) > 1.5) yDirectionReversals++;
+                // 排除小於 3.0 像素的特徵微抖動
+                if (dx * prevDx < 0 && Math.abs(dx) > 3.0) xDirectionReversals++;
+                if (dy * prevDy < 0 && Math.abs(dy) > 3.0) yDirectionReversals++;
             }
             prevDx = dx;
             prevDy = dy;
@@ -1235,13 +1217,13 @@ function checkContinuousBodyShaking(nose, faceSize, currentTime, w, h) {
     const ySpan = (maxY - minY) * h / faceSize;
     const sizeSpan = (maxSize - minSize) / faceSize;
 
-    // 判定前後左右劇烈持續晃動：
-    // - 左右橫向擺動幅度 > 0.16 (橫向大幅擺動) 或 前後/俯仰幅度 > 0.16 或 臉距大小縮放 > 0.15
-    // - 且在 1.2 秒內累積速度 > 2.0 (排除靜止慢速轉頭)
-    // - 且有至少 2 次方向反轉 (證明為來回擺動/晃動，非單純側頭)
+    // 判定前後左右劇烈晃動：
+    // - 至少 2 次方向反向來回（Reversals >= 2）
+    // - 左右大幅位移 (xSpan > 0.22) 或 前後/俯仰晃動 (ySpan > 0.20 或 sizeSpan > 0.18)
+    // - 1.2 秒內累計速度達標 (totalSpeed > 2.8)
     const hasDirectionReversal = (xDirectionReversals >= 2 || yDirectionReversals >= 2);
-    const hasSignificantSpan = (xSpan > 0.16 || ySpan > 0.16 || sizeSpan > 0.15);
-    const hasSustainedSpeed = (totalSpeed > 2.0);
+    const hasSignificantSpan = (xSpan > 0.22 || ySpan > 0.20 || sizeSpan > 0.18);
+    const hasSustainedSpeed = (totalSpeed > 2.8);
 
     return (hasSignificantSpan && hasSustainedSpeed && hasDirectionReversal);
 }
