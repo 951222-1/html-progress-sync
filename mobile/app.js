@@ -289,12 +289,29 @@ function setupCanvasAndVideo() {
 async function startMealSession() {
     try {
         webcamStream = await navigator.mediaDevices.getUserMedia({
-            video: { width: 640, height: 480, facingMode: "user" },
+            video: {
+                facingMode: "user",
+                width: { ideal: 1280 },
+                height: { ideal: 720 }
+            },
             audio: true
         });
 
         webcamVideo.srcObject = webcamStream;
         await webcamVideo.play();
+
+        // 🎯 動態感知手機鏡頭真實像素尺寸 (直式 portrait 或 橫式 landscape)
+        const vW = webcamVideo.videoWidth || 640;
+        const vH = webcamVideo.videoHeight || 480;
+
+        aiCanvas.width = vW;
+        aiCanvas.height = vH;
+
+        // 同步適應相機 Viewport 容器比例，完全解決手機直式拍攝畫面遭擠壓壓縮變形
+        const container = document.getElementById('camera-container');
+        if (container) {
+            container.style.aspectRatio = `${vW} / ${vH}`;
+        }
 
         // 綁定 Web Audio API 聲學分析
         setupAudioAnalyzer(webcamStream);
