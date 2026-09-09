@@ -738,11 +738,6 @@ async function processVideoFrame(now) {
                 currentState = ST_SWALLOW;
                 stateStartTime = currentTime;
                 console.log("【通知】咀嚼停止，下巴上提 (定格吞嚥中...)");
-            } else if ((currentTime - stateStartTime) > 4.0) {
-                const warnMsg = "⚠️【哽噎預警】咀嚼超過 4 秒仍未吞嚥，請注意！";
-                console.warn(warnMsg);
-                triggerAlertLevel('L2', warnMsg);
-                stateStartTime = currentTime; // 重置避免連續洗版
             }
         } else if (currentState === ST_SWALLOW) {
             if ((currentTime - stateStartTime) > 0.6) {
