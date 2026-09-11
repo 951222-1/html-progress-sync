@@ -1,3 +1,12 @@
+/* ==========================================================================
+   🛡️ 頁面半透明文字浮水印 (作品展示版權宣告: phoebe])
+   ========================================================================== */
+body {
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='200' height='200'%3E%3Ctext x='100' y='100' fill='rgba(15,23,42,0.1)' font-size='18' font-family='-apple-system, BlinkMacSystemFont, sans-serif' font-weight='bold' text-anchor='middle' dominant-baseline='middle' transform='rotate(-45 100 100)'%3Ephoebe]%3C/text%3E%3Ctext x='0' y='0' fill='rgba(15,23,42,0.1)' font-size='18' font-family='-apple-system, BlinkMacSystemFont, sans-serif' font-weight='bold' text-anchor='middle' dominant-baseline='middle' transform='rotate(-45 0 0)'%3Ephoebe]%3C/text%3E%3Ctext x='200' y='0' fill='rgba(15,23,42,0.1)' font-size='18' font-family='-apple-system, BlinkMacSystemFont, sans-serif' font-weight='bold' text-anchor='middle' dominant-baseline='middle' transform='rotate(-45 200 0)'%3Ephoebe]%3C/text%3E%3Ctext x='0' y='200' fill='rgba(15,23,42,0.1)' font-size='18' font-family='-apple-system, BlinkMacSystemFont, sans-serif' font-weight='bold' text-anchor='middle' dominant-baseline='middle' transform='rotate(-45 0 200)'%3Ephoebe]%3C/text%3E%3Ctext x='200' y='200' fill='rgba(15,23,42,0.1)' font-size='18' font-family='-apple-system, BlinkMacSystemFont, sans-serif' font-weight='bold' text-anchor='middle' dominant-baseline='middle' transform='rotate(-45 200 200)'%3Ephoebe]%3C/text%3E%3C/svg%3E");
+    background-repeat: repeat;
+    background-attachment: scroll;
+}
+
 :root {
     --primary-color: #2563eb;
     --primary-hover: #1d4ed8;
