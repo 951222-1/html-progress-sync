@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>進度報告 #20251006 — 體感彈弓射水果:判定改版與長輩友善 UI</title>
+<style>
+  :root { --ink:#1f2937; --muted:#6b7280; --accent:#b45309; --card:#fffbeb; --line:#fde68a; }
+  * { box-sizing:border-box; margin:0; padding:0; }
+  body { font-family:"Segoe UI","Microsoft JhengHei",system-ui,sans-serif; color:var(--ink); background:#fafaf9; line-height:1.7; padding:32px 16px; }
+  .wrap { max-width:860px; margin:0 auto; }
+  header { background:linear-gradient(135deg,#78350f,#b45309); color:#fffbeb; border-radius:16px; padding:28px 32px; margin-bottom:24px; }
+  header h1 { font-size:26px; margin-bottom:8px; }
+  header .meta { font-size:13px; opacity:.92; display:flex; flex-wrap:wrap; gap:14px; }
+  .badge { display:inline-block; background:#4ade80; color:#052e16; font-weight:700; font-size:12px; padding:3px 12px; border-radius:999px; margin-top:10px; }
+  section { background:#fff; border:1px solid #e7e5e4; border-radius:14px; padding:24px 28px; margin-bottom:18px; }
+  section h2 { font-size:18px; color:var(--accent); border-left:5px solid var(--accent); padding-left:12px; margin-bottom:14px; }
+  section h3 { font-size:15px; margin:16px 0 6px; }
+  ul { padding-left:22px; }
+  li { margin-bottom:6px; }
+  .tag { display:inline-block; font-size:12px; background:var(--card); border:1px solid var(--line); color:#92400e; padding:1px 10px; border-radius:6px; margin:2px 4px 2px 0; }
+  table { width:100%; border-collapse:collapse; font-size:14px; margin-top:8px; }
+  th, td { border:1px solid #e7e5e4; padding:8px 12px; text-align:left; }
+  th { background:#fef3c7; }
+  code { background:#f5f5f4; padding:2px 6px; border-radius:5px; font-size:13px; }
+  .note { background:var(--card); border:1px dashed var(--line); border-radius:10px; padding:12px 16px; font-size:14px; margin-top:12px; }
+  footer { text-align:center; color:var(--muted); font-size:12px; margin-top:20px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>🏹 體感彈弓射水果 — 判定改版 + 長輩友善 UI + 穩定性強化</h1>
+  <div class="meta">
+    <span>專案:C:\aiii\bone-next\水果 (Vite + 原生 JS + MediaPipe Tasks-Vision)</span>
+    <span>日期:2026-10-06</span>
+  </div>
+  <span class="badge">STATUS: COMPLETED</span>
+</header>
+
+<section>
+  <h2>任務目標</h2>
+  <p>將體感彈弓遊戲的發射判定從「雙手併攏拉弓、張手發射」改為適合長輩操作的流程:<b>雙手併攏舉高過肩 → 往下拉弓 → 續力 3 秒自動發射</b>,同步更新動作教學引導(三欄圖卡 + 插圖小人),並解決實測中判定不穩定的問題。</p>
+</section>
+
+<section>
+  <h2>完成內容</h2>
+  <h3>1. 發射判定全面改版(slingshotGame.js)</h3>
+  <ul>
+    <li>移除舊觸發:張手發射、雙手分開發射、手離開畫面誤射。</li>
+    <li>新狀態流:IDLE →(併攏+肩上)→ READY →(拉到肩下 45px)→ PULLING → 續力 3 秒自動發射。</li>
+    <li>新增姿勢偵測:由 pose landmarks 11/12 取得肩膀位置與肩寬。</li>
+    <li>蓄力以真實時間差累計(dt 上限 100ms 防切頁暴衝),發射後自動回 IDLE 防連發。</li>
+  </ul>
+  <h3>2. 關鍵 Bug 修復</h3>
+  <ul>
+    <li><b>READY/PULLING 條件矛盾</b>:原「抓住需肩上、進拉弓需肩下」永遠不可能同時成立,導致正式遊戲無法射擊;修正為抓住後下拉不再要求肩上。</li>
+    <li>教學第 3 步蓄力被重複加算(3 秒變 1.5 秒):統一由 PULLING 分支處理。</li>
+  </ul>
+  <h3>3. 穩定性強化(五道機制)</h3>
+  <ul>
+    <li>指數平滑(手部 0.45 / 肩線 0.3)過濾每幀抖動。</li>
+    <li>肩線記憶 2 秒:pose 短暫抓不到肩不跌回 fallback。</li>
+    <li>防抖計數:併攏連續 3 幀、進拉弓連續 4 幀才切換狀態。</li>
+    <li>寬限時制:拉弓中手遺失 &lt;0.6s 沿用最後位置;手微分 &lt;0.25s 不中斷蓄力。</li>
+    <li>Fallback 加強:單手可玩;完全沒手時改用 pose 手腕(visibility 門檻 0.35→0.25)。</li>
+  </ul>
+  <h3>4. 長輩友善 UI(gameRenderer.js / main.js)</h3>
+  <ul>
+    <li>水果極簡化:移除光環外框、底色圓、漸層陰影,只留放大 emoji(r×2.1)+ 細枝梗;水果本體加大(radius 上限 30→36)。</li>
+    <li>瞄準提示改為整顆放大脈動(不再靠發光框)。</li>
+    <li>教學木牌改為三欄圖卡式引導:數字徽章、當前步驟高亮、完成打勾、純 canvas 繪製的示意小人(舉手過肩/併攏下拉/續力碼錶)與虛線箭頭。</li>
+    <li>小人插圖經三次截圖迭代修正:手臂雙層描邊、舉手避開頭部、下拉手位於胸前。</li>
+    <li>所有文案同步(教學牌、提示卡、副標):「併攏舉高過肩 → 往下拉弓 → 續力 3 秒發射」。</li>
+  </ul>
+  <h3>5. 執行環境</h3>
+  <ul>
+    <li>Dev server #1:<code>http://127.0.0.1:5175/</code>(穩定測試版,綁 IPv4 修正原本 ::1 連不上問題)</li>
+    <li>Dev server #2:<code>http://127.0.0.1:5176/</code>(新功能開發用,strictPort)</li>
+  </ul>
+</section>
+
+<section>
+  <h2>可調參數一覽</h2>
+  <table>
+    <tr><th>參數</th><th>預設值</th><th>說明</th></tr>
+    <tr><td>CHARGE_REQUIRED_MS</td><td>3000</td><td>續力秒數</td></tr>
+    <tr><td>併攏門檻</td><td>min(180, 寬×0.25)</td><td>雙手距離判定</td></tr>
+    <tr><td>過肩容差</td><td>+15px</td><td>舉高判定</td></tr>
+    <tr><td>進入拉弓 / 取消</td><td>45px / 25px</td><td>肩線遲滯帶</td></tr>
+    <tr><td>平滑係數</td><td>0.45(手)/ 0.3(肩)</td><td>越大越靈敏、越小越穩</td></tr>
+  </table>
+</section>
+
+<section>
+  <h2>驗證方式</h2>
+  <ul>
+    <li><code>npm run build</code> 每次修改後通過(vite 8.3.2,無錯誤)。</li>
+    <li>以 portable Chrome + CDP 實載頁面,截圖比對教學卡版面(共 4 輪迭代)。</li>
+    <li>實測錄影佐證:截圖捕捉到步驟 1、2 完成 ✔、步驟 3 續力倒數進度條運作中 — 新判定端到端可用。</li>
+  </ul>
+  <div class="note">📌 待辦(下個階段):於 port 5176 開發新功能;另 video 以 object-fit:cover 顯示時,4:3 攝影機來源的手部 overlay 座標可能與實際位置錯位,尚未處理。</div>
+</section>
+
+<section>
+  <h2>異動檔案</h2>
+  <ul>
+    <li><code>src/game/slingshotGame.js</code> — 判定改版、蓄力機制、穩定性五道機制</li>
+    <li><code>src/render/gameRenderer.js</code> — 水果極簡化、三欄教學卡、插圖小人/箭頭/碼錶、蓄力進度環</li>
+    <li><code>src/main.js</code> — 副標與三張提示卡文案</li>
+  </ul>
+  <p style="margin-top:10px">
+    <span class="tag">MediaPipe</span><span class="tag">Gesture Control</span><span class="tag">Canvas 2D</span><span class="tag">長輩友善</span><span class="tag">Vite</span>
+  </p>
+</section>
+
+<footer>Generated by Hermes Agent · 2026-10-06 · 體感彈弓射水果專案進度報告</footer>
+</div>
+</body>
+</html>
