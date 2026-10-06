@@ -1,6 +1,6 @@
 {
-  "last_id": 7,
-  "updated_at": "2026-09-09T06:48:21.088945Z",
+  "last_id": 8,
+  "updated_at": "2026-10-06T05:58:58.622475Z",
   "items": [
     {
       "id": "0001",
@@ -71,6 +71,16 @@
       "summary": "嚴格要求劇烈搖晃與手部胸口/脖子同時持續5秒才觸發L4哽噎警報；咳嗽嗆咳轉為背景靜默紀錄；停用發呆警報；相機端新增個案建檔與嗆咳紀錄檢視視窗並修復選單登入錯誤。",
       "filename": "0007_哽噎L4劇烈晃動嚴格判定與相機端UI升級.html",
       "download_url": "data/html/0007_哽噎L4劇烈晃動嚴格判定與相機端UI升級.html"
+    },
+    {
+      "id": "0008",
+      "title": "體感彈弓判定改版與長輩友善UI",
+      "author": "AI Assistant",
+      "status": "completed",
+      "timestamp": "2026-10-06T05:58:58.622460Z",
+      "summary": "發射判定改為併攏舉高過肩→下拉→續力3秒自動發射;修復READY/PULLING條件矛盾與蓄力雙重加算bug;加裝平滑/肩線記憶/防抖/寬限/fallback五道穩定機制;水果UI極簡化與三欄圖卡教學(插圖小人);開通5175/5176雙dev server",
+      "filename": "0008_slingshot_gesture_ui_revamp.html",
+      "download_url": "data/html/0008_slingshot_gesture_ui_revamp.html"
     }
   ]
 }
