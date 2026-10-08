@@ -1,0 +1,139 @@
+# 體感彈弓射水果 🏹 專案開發與修改記錄 (MODIFICATIONS)
+
+本文件詳細記錄自專案初始狀態至今的所有分析、重構、功能開發、畫面設計微調與異常修復歷程。
+
+---
+
+## 目錄
+1. [專案背景與初始狀態](#1-專案背景與初始狀態)
+2. [遊戲核心玩法設計變革](#2-遊戲核心玩法設計變革)
+3. [目錄結構與新增檔案清單](#3-目錄結構與新增檔案清單)
+4. [核心模組修改與實作細節](#4-核心模組修改與實作細節)
+5. [關鍵問題修復：載入模型卡住排查](#5-關鍵問題修復載入模型卡住排查)
+6. [如何啟動與測試](#6-如何啟動與測試)
+
+---
+
+## 1. 專案背景與初始狀態
+
+### 初始狀態體檢 (`C:\aiii\bone-next`)
+* **原專案性質**：單一檔案 [main.js](file:///c:/aiii/bone-next/src/main.js) (256 行) 的簡易碰觸計次網頁，依賴 `@mediapipe/tasks-vision` 與 `vite`。
+* **原存痛點**：
+  1. **職責混雜**：UI DOM、Webcam 管理、AI 視覺推論、Canvas 繪圖全擠在單一檔案，擴充困難。
+  2. **模型載入依賴外網**：WASM 引擎指向外部 jsdelivr CDN，遇到網路延遲或阻擋容易卡死。
+  3. **玩法單一**：僅一個固定在畫面上方中央的圓形目標，無音效、無倒數、無豐富視覺回饋。
+
+---
+
+## 2. 遊戲核心玩法設計變革
+
+經多輪討論與畫面設計確認，確定了**「體感彈弓射水果（1分鐘限時挑戰）」**的完整規則：
+
+1. **體感手勢互動**：
+   - **抓取準備**：雙手在胸前靠近並攏，彈弓皮兜自動吸附於雙手之間。
+   - **向下拉弓**：雙手往下拉伸皮筋，**往下拉得越長，射擊位置越高**；左右微調位置控制偏角與瞄準線。
+   - **放手射擊**：支援「張開手掌 🖐️」或「雙手分開」，任一動作成立彈丸即破空射出。
+2. **畫面視覺層次**：
+   - **動作校準教學木牌**：遊戲開始時於中央引導確認 3 步驟（✊ 握拳 $\rightarrow$ ⬇ 拉弓 $\rightarrow$ 🖐️ 放手），確認完成後自動收起，保持畫面乾淨開闊。
+   - **左下角立式木牌**：做成插在地面的立體小木牌，顯示 ⏱️ `01:00` 倒數計時、⭐ 得分、🍎 擊落數量。
+   - **頂部滿版樹梢與 7 顆水果**：釋放頂部空間，掛滿 7 顆彩色水果（紅蘋果、甜橙、水蜜桃、黃檸檬、青蘋果），每顆帶有類似圖一的**發光光環**，準星鎖定時發光增強。
+   - **Q 版卡通白手套**：彈弓皮兜被一雙可愛肉嘟嘟的白色拳頭 ✊ 握住，放手瞬間切換為張開手掌 🖐️。
+3. **時間結算**：
+   - 60 秒倒數結束彈出結算木牌，頒發專屬稱號評級（如：👑 傳奇神射手！），並提供「再玩一局 🔄」重新挑戰。
+
+---
+
+## 3. 目錄結構與新增檔案清單
+
+所有程式碼已依照要求獨立放置於 **`C:\aiii\bone-next\水果\`**：
+
+```
+C:\aiii\bone-next\水果/
+├── index.html                   # [NEW] HTML 遊戲入口
+├── package.json                 # [NEW] 專案配置 (預設 port 5175)
+├── 修改記錄.md                  # [NEW] 本開發歷程說明檔
+├── public/
+│   ├── models/                  # [COPIED] 本地 MediaPipe Pose & Hand 視覺模型檔
+│   │   ├── pose_landmarker_lite.task (5.8MB)
+│   │   └── hand_landmarker.task (7.8MB)
+│   └── wasm/                    # [NEW COPIED] 本地 WASM 核心引擎 (免連 CDN)
+│       ├── vision_wasm_internal.js / .wasm
+│       ├── vision_wasm_module_internal.js / .wasm
+│       └── vision_wasm_nosimd_internal.js / .wasm
+└── src/
+    ├── main.js                  # [NEW] 主程式控制器、UI 生命週期與相機循環
+    ├── style.css                # [NEW] 深色科技感與童趣介面響應式樣式
+    ├── game/
+    │   └── slingshotGame.js     # [NEW] 核心遊戲狀態機 (校準/計時/彈弓物理/碰撞/結算)
+    ├── render/
+    │   ├── cartoonHands.js      # [NEW] Q 版向量卡通手模組 (握拳 ✊ 與張手 🖐️)
+    │   └── gameRenderer.js      # [NEW] 畫布渲染器 (樹梢、發光水果、左下立牌、準星、粒子)
+    └── services/
+        ├── audio.js             # [NEW] 原生 Web Audio 合成音效 (拉弦/射擊/爆汁/倒數/結算)
+        ├── camera.js            # [NEW] 攝影機串流生命週期管理 (超時安全保護)
+        └── vision.js            # [NEW] MediaPipe 雙模型封裝 (GPU 優先 + CPU 自動降級)
+```
+
+---
+
+## 4. 核心模組修改與實作細節
+
+### 4.1 遊戲狀態機與物理運算 ([src/game/slingshotGame.js](file:///c:/aiii/bone-next/%E6%B0%B4%E6%9E%9C/src/game/slingshotGame.js))
+* **四階段狀態機**：`CALIBRATION`（校準教學） $\rightarrow$ `PLAYING`（60秒倒數開玩） $\rightarrow$ `FINISHED`（時間到結算）。
+* **手部幾何判定**：
+  - 同時融合 `HandLandmarker`（精準指尖與掌心距離）與 `PoseLandmarker`（手腕備用點），徹底避免單一模型掉點。
+  - 雙手距離 $\le 160\text{px}$ 判定為握拳並攏；指尖距離擴大或雙手距離 $\ge 240\text{px}$ 判定為放手發射。
+* **拉弓射程映射**：
+  - 下拉距離 $\Delta y$（$20\text{px} \sim 160\text{px}$）線性映射至射擊高度 $Y$（拉得越低，目標高度越接近樹頂）。
+  - 水平偏移 $\Delta x$ 具備反向牽引手感，左右微調即時聯動發光拋物虛線。
+* **水果掉落與重生**：
+  - 碰撞偵測具有寬容判定圈（Hitbox），擊中後產生重力加速度 $v_y += 0.45$ 與隨機自轉 $\omega$。
+  - 掉出螢幕後進入 `RESPAWNING` 計時器，2.5 秒後在樹枝原位「啵」一聲長出新水果。
+
+### 4.2 向量卡通手繪製 ([src/render/cartoonHands.js](file:///c:/aiii/bone-next/%E6%B0%B4%E6%9E%9C/src/render/cartoonHands.js))
+* 純 Canvas 貝茲曲線向量繪製，無須外掛任何圖檔即可在任何螢幕解析度下呈現高畫質：
+  - `drawFist()`：繪製圓潤的 Q 版肉嘟嘟白色拳頭 ✊，帶有手指縫隙陰影與可愛粉嫩指節腮紅。
+  - `drawOpenPalm()`：繪製五指張開的白色手掌 🖐️，手掌中心有肉墊腮紅，放手瞬間即時切換。
+
+### 4.3 畫布場景渲染 ([src/render/gameRenderer.js](file:///c:/aiii/bone-next/%E6%B0%B4%E6%9E%9C/src/render/gameRenderer.js))
+* `drawTreeCanopy()`：繪製橫跨頂部的多層次綠色樹冠與樹枝橫木。
+* `drawFruit()`：繪製發光目標光環（未鎖定柔和發光，準星瞄準時切換為亮金黃色高亮脈衝）。
+* `drawBottomLeftSignpost()`：在左下角繪製插在青草地上的立體小木牌，顯示倒數時間、分數、擊落數。
+* `drawTutorialSignboard()` & `drawSettlementSignboard()`：校準教學木牌與時間到結算面板。
+
+### 4.4 原生 Web Audio 音效 ([src/services/audio.js](file:///c:/aiii/bone-next/%E6%B0%B4%E6%9E%9C/src/services/audio.js))
+* 完全不需載入外部音訊檔案，零延遲即時合成：
+  - `playStretch(progress)`：隨拉力大小動態改變頻率的皮筋繃緊聲。
+  - `playShoot()`：發射破空「咻——」滑音。
+  - `playFruitHit()`：雙頻率疊加的清脆果實爆裂「啵碰！」聲。
+  - `playFruitRespawn()`：新水果長出的彈性音。
+  - `playTick()` / `playTimeUp()`：最後 10 秒急促滴答音與四音和弦結算鈴聲。
+
+---
+
+## 5. 關鍵問題修復：載入模型卡住排查
+
+在首次測試時，使用者反應瀏覽器停留在「載入模型中…」無法開啟。經過深入排查，解決了以下三項關鍵問題：
+
+| 問題點 | 根本原因 | 具體修復方案 |
+| :--- | :--- | :--- |
+| **WASM 載入超時/阻擋** | 原程式碼指向外部 CDN (`cdn.jsdelivr.net`)，在本地網路環境下易發生載入緩慢或連線逾時。 | 將 `node_modules` 內的 6 個 WASM 核心檔案完整拷貝至本地 `/public/wasm`，修改 `vision.js` 改為 **100% 本地相對路徑 `/wasm` 載入**，徹底免除對外網的依賴。 |
+| **GPU 環境相容性** | 部分顯卡在 WebGL / GPU Delegate 下初始化可能丟失 context。 | 在 `vision.js` 中新增 **GPU 失敗自動降級至 CPU** 容錯機制。 |
+| **相機 Promise 掛起** | `loadedmetadata` 事件可能在監聽器掛載前就已觸發，或特定攝影機未拋出該事件，導致 `await` 永久等待。 | 在 `camera.js` 加入 `readyState >= 1` 即時檢查、3 秒安全超時保護，以及解析度降級重試機制。 |
+| **介面啟動指引** | 初始啟動按鈕位於畫面下方，容易被使用者忽略。 | 在畫面正中央加入醒目的黃色按鈕 **「立即啟動 Webcam 🎥」**，並即時回報載入步驟（WASM $\rightarrow$ 人體模型 $\rightarrow$ 手勢模型 $\rightarrow$ 攝影機）。 |
+
+---
+
+## 6. 如何啟動與測試
+
+1. **開啟終端機並切換至目錄**：
+   ```cmd
+   cd C:\aiii\bone-next\水果
+   npm run dev
+   ```
+2. **在瀏覽器中開啟測試網址**：
+   👉 **http://localhost:5175/**
+3. **遊玩步驟**：
+   - 點擊畫面中央的 **「立即啟動 Webcam 🎥」** 並允許瀏覽器使用視訊鏡頭。
+   - 依照中央教學木牌指引完成 3 步驟校準（或點擊右上角「跳過教學 ⏩」）。
+   - 60 秒挑戰正式開始，拉動彈弓射下樹上的水果！
