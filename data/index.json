@@ -1,6 +1,6 @@
 {
-  "last_id": 9,
-  "updated_at": "2026-09-09T06:48:21.088945Z",
+  "last_id": 10,
+  "updated_at": "2026-10-27T06:28:58.017255Z",
   "items": [
     {
       "id": "0001",
@@ -91,6 +91,16 @@
       "summary": "整理困難版蜂巢規則、拉弓手部 2 秒保留、非當季提示、困難版蜂巢保底與滿版切換；建置及回歸測試通過，已更新公開版。",
       "filename": "0009_fruit_game_updates_2026-10-26_27.html",
       "download_url": "data/html/0009_fruit_game_updates_2026-10-26_27.html"
+    },
+    {
+      "id": "0010",
+      "title": "體感黃金淘沙遊戲卡死修復與節奏音效體驗全面升級",
+      "author": "Antigravity AI Agent",
+      "status": "completed",
+      "timestamp": "2026-10-27T06:28:58.017214Z",
+      "summary": "徹底修復畫面卡死與右手缺失，實裝5~8秒舒緩淘洗節奏、三段式驚喜揭曉與高擬真ASMR溪水防重疊音效，全線完成部署",
+      "filename": "0010_體感黃金淘沙遊戲卡死修復與節奏音效體驗全面升級.html",
+      "download_url": "data/html/0010_體感黃金淘沙遊戲卡死修復與節奏音效體驗全面升級.html"
     }
   ]
 }
