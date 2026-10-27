@@ -1,0 +1,128 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>水果遊戲更新總整理｜2026-10-26 至 10-27</title>
+  <style>
+    :root{color-scheme:dark;--bg:#0b1512;--panel:#14221c;--panel2:#192b23;--ink:#f2f4e9;--muted:#bac6b9;--line:#30473a;--gold:#f4c95d;--mint:#9fc9a2;--blue:#9bc6d7}
+    *{box-sizing:border-box}
+    body{margin:0;background:radial-gradient(ellipse at 18% 0%,#1c382b 0,transparent 48%),var(--bg);color:var(--ink);font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif}
+    main{width:min(920px,calc(100% - 32px));margin:0 auto;padding:38px 0 60px}
+    header{padding:28px clamp(20px,5vw,44px);border:1px solid var(--line);border-radius:22px;background:linear-gradient(140deg,#1b3025,#112019 75%);box-shadow:0 20px 50px #0005}
+    .eyebrow{margin:0 0 8px;color:var(--gold);font-size:13px;font-weight:800;letter-spacing:.12em}
+    h1{margin:0;font-size:clamp(28px,5vw,42px);line-height:1.2;letter-spacing:-.03em}
+    .sub{margin:12px 0 0;color:var(--muted)}
+    .summary{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:18px 0 28px}
+    .summary div{padding:14px 16px;border:1px solid var(--line);border-radius:14px;background:#122019}
+    .summary strong{display:block;color:var(--gold);font-size:20px}
+    .summary span{color:var(--muted);font-size:13px}
+    section{margin-top:22px;padding:22px clamp(18px,4vw,30px);border:1px solid var(--line);border-radius:18px;background:var(--panel)}
+    h2{margin:0 0 14px;font-size:21px;color:var(--gold)}
+    h3{margin:0 0 8px;font-size:17px;color:var(--ink)}
+    p{margin:7px 0;color:var(--muted)}
+    ul{margin:8px 0 0;padding-left:22px;color:var(--muted)}
+    li{margin:6px 0}
+    .timeline{display:grid;gap:14px}
+    .item{padding:16px 18px;border-left:3px solid var(--mint);border-radius:0 12px 12px 0;background:var(--panel2)}
+    .date{margin:0 0 5px;color:var(--mint);font-size:12px;font-weight:800;letter-spacing:.08em}
+    .tag{display:inline-block;margin:3px 6px 3px 0;padding:3px 9px;border:1px solid #496456;border-radius:999px;color:#c8dfc6;font-size:12px}
+    .verify{border-color:#5b5735;background:#211f16}
+    .verify h2{color:var(--gold)}
+    a{color:var(--blue)}
+    footer{margin:18px 4px 0;color:#8fa093;font-size:12px}
+    @media(max-width:620px){main{width:min(100% - 20px,920px);padding-top:18px}.summary{grid-template-columns:1fr}.summary div{display:flex;align-items:center;justify-content:space-between;gap:12px}.summary strong{font-size:18px}}
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <p class="eyebrow">更新摘要 · 2026/10/26–10/27</p>
+    <h1>體感彈弓水果遊戲<br>這幾天更新了什麼</h1>
+    <p class="sub">整理困難版蜂巢、手部追蹤、提示呈現與滿版切換；保留已穩定的去背背景和計分規則。</p>
+  </header>
+
+  <div class="summary" aria-label="更新摘要">
+    <div><strong>最多 2 秒</strong><span>拉弓時手部掉偵測保留</span></div>
+    <div><strong>至少 1 個</strong><span>困難版蜂巢場上保底</span></div>
+    <div><strong>可切換</strong><span>滿版／視窗遊玩</span></div>
+  </div>
+
+  <section>
+    <h2>更新內容</h2>
+    <div class="timeline">
+      <article class="item">
+        <p class="date">10 月 26 日｜困難版蜂巢規則</p>
+        <h3>蜂巢取代原水果位置，不額外增加槽位</h3>
+        <ul>
+          <li>使用提供的蜂巢圖；每局開場放 1–2 個蜂巢，總水果位置仍是 7 個。</li>
+          <li>射中蜂巢扣 5 分，分數最低為 0；蜂巢在場上超過 15 秒未被擊落會自動掉落，不扣分。</li>
+          <li>蜂巢離場後原位 2.5 秒長回隨機水果；玩家擊落水果後重生時有 30% 機率變蜂巢，同時最多 2 個。</li>
+        </ul>
+        <span class="tag">蜂巢圖</span><span class="tag">15 秒自動掉落</span><span class="tag">30% 重生機率</span>
+      </article>
+      <article class="item">
+        <p class="date">10 月 27 日｜拉弓追蹤穩定</p>
+        <h3>拉弓中雙手短暫離開畫面，沿用最後位置最多 2 秒</h3>
+        <ul>
+          <li>只在 PULLING 拉弓狀態保留最後雙手位置；超過 2 秒就清除並重置。</li>
+          <li>偵測中斷期間暫停蓄力，避免殘留手部座標造成意外自動發射。</li>
+          <li>非拉弓狀態仍使用較短的骨架顯示寬限。</li>
+        </ul>
+        <span class="tag">三種模式共用</span><span class="tag">不改計分規則</span>
+      </article>
+      <article class="item">
+        <p class="date">10 月 27 日｜非當季水果提示</p>
+        <h3>改成和蜂巢命中相同的飄字，不再跳中央大提示</h3>
+        <ul>
+          <li>普通採收與困難版都在命中位置顯示「非當季！+5分」，沿用蜂巢命中的位置、動畫與配色。</li>
+          <li>非當季水果仍可擊落，+5 分照常計入；提示不再遮住畫面中央。</li>
+        </ul>
+      </article>
+      <article class="item">
+        <p class="date">10 月 27 日｜困難版蜂巢保底</p>
+        <h3>困難版場上至少維持一個蜂巢，最多仍是兩個</h3>
+        <ul>
+          <li>最後一個蜂巢掉落後，會在可用水果槽補回蜂巢；原蜂巢槽仍依原規則重生水果。</li>
+          <li>補位優先保留至少 3 顆當季水果，並遵守最多 2 個蜂巢上限。</li>
+        </ul>
+      </article>
+      <article class="item">
+        <p class="date">10 月 27 日｜滿版遊玩</p>
+        <h3>右上角可切換「滿版／退出滿版」</h3>
+        <ul>
+          <li>可在開始前或遊戲中切換；滿版包含遊戲舞台與採收目標木牌。</li>
+          <li>可按 Esc 或畫面按鈕退出；切換尺寸時同步縮放水果、蜂巢、彈丸及手部位置，維持碰撞座標。</li>
+        </ul>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <h2>保留不變</h2>
+    <ul>
+      <li>樹林去背背景與人物分割流程未改。</li>
+      <li>經典彈弓仍是任何水果都能射，每顆命中固定 +15 分。</li>
+      <li>水果採收與困難版的當季水果計分、非當季 +5 分及既有蜂巢扣分規則保留。</li>
+    </ul>
+  </section>
+
+  <section class="verify">
+    <h2>驗證結果</h2>
+    <ul>
+      <li>Vite production build 通過。</li>
+      <li>自動測試涵蓋 2 秒手部保留、蓄力不因殘影誤發射、兩種採收模式 +5 分提示、困難版蜂巢至少 1 個與最多 2 個上限，以及既有模式回歸。</li>
+      <li>在瀏覽器實際點擊測試滿版進入／退出，並確認採收木牌仍在視窗內；GitHub Pages 部署狀態為 built、頁面 HTTP 200。</li>
+      <li>未啟動 Webcam 進行實際體感射擊測試。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>相關版本</h2>
+    <p>主要遊戲提交：<code>8208a6c</code>（蜂巢機率 30%）、<code>3134092</code>（拉弓手部 2 秒保留）、<code>9ec2b22</code>（蜂巢式提示與蜂巢保底）、<code>0632808</code>（滿版切換）。</p>
+    <p><a href="https://951222-1.github.io/fruit/">開啟目前水果遊戲</a></p>
+  </section>
+  <footer>整理範圍：2026 年 10 月 26–27 日。以專案 Git 提交、建置輸出與測試結果為依據。</footer>
+</main>
+</body>
+</html>
