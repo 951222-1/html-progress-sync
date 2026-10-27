@@ -6,14 +6,57 @@ const DEFAULT_CONFIG = {
     token: ''
 };
 
+// 預設訪問密碼 phoebe9527 的 SHA-256 雜湊值 (不儲存明文密碼)
+const DEFAULT_AUTH_HASH = '139f6ba9c3949e00eda40911790662e408fe45e2fe0dd5e817505f1a02433557';
+
 let config = { ...DEFAULT_CONFIG };
 let database = { last_id: 0, updated_at: '', items: [] };
+
+// SHA-256 雜湊計算輔助函數
+async function computeSHA256(text) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(text);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+    return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function isUnlocked() {
+    return sessionStorage.getItem('ag_auth_unlocked') === 'true';
+}
+
+function getTargetAuthHash() {
+    return localStorage.getItem('ag_custom_password_hash') || DEFAULT_AUTH_HASH;
+}
+
+function updateAuthUI() {
+    const overlay = document.getElementById('authOverlay');
+    const mainContainer = document.getElementById('mainContainer');
+    if (isUnlocked()) {
+        if (overlay) overlay.classList.add('hidden');
+        if (mainContainer) mainContainer.style.display = 'block';
+    } else {
+        if (overlay) {
+            overlay.classList.remove('hidden');
+            const input = document.getElementById('sitePasswordInput');
+            if (input) {
+                input.value = '';
+                setTimeout(() => input.focus(), 150);
+            }
+        }
+        if (mainContainer) mainContainer.style.display = 'none';
+    }
+}
 
 // Initialize App
 document.addEventListener('DOMContentLoaded', () => {
     loadSettings();
     bindEvents();
-    loadDatabase();
+    bindAuthEvents();
+    updateAuthUI();
+    if (isUnlocked()) {
+        loadDatabase();
+    }
 });
 
 // Load settings from localStorage
@@ -33,17 +76,28 @@ function loadSettings() {
 }
 
 // Save settings
-function saveSettings(e) {
+async function saveSettings(e) {
     if (e) e.preventDefault();
     config.owner = document.getElementById('repoOwner').value.trim();
     config.repo = document.getElementById('repoName').value.trim();
     config.branch = document.getElementById('repoBranch').value.trim() || 'main';
     config.token = document.getElementById('patToken').value.trim();
 
+    // 檢查是否有設定自訂訪問密碼
+    const customPwdInput = document.getElementById('customPassword');
+    if (customPwdInput && customPwdInput.value.trim()) {
+        const newHash = await computeSHA256(customPwdInput.value.trim());
+        localStorage.setItem('ag_custom_password_hash', newHash);
+        customPwdInput.value = '';
+        showToast('網站訪問密碼已成功更新！', 'success');
+    }
+
     localStorage.setItem('ag_sync_config', JSON.stringify(config));
     showToast('設定已成功儲存！', 'success');
     toggleSettingsPanel(false);
-    loadDatabase();
+    if (isUnlocked()) {
+        loadDatabase();
+    }
 }
 
 function toggleSettingsPanel(show) {
@@ -62,7 +116,13 @@ function bindEvents() {
     document.getElementById('btnToggleSettings').addEventListener('click', () => toggleSettingsPanel());
     document.getElementById('settingsForm').addEventListener('submit', saveSettings);
     document.getElementById('uploadForm').addEventListener('submit', handleUpload);
-    document.getElementById('btnRefresh').addEventListener('click', loadDatabase);
+    document.getElementById('btnRefresh').addEventListener('click', () => {
+        if (isUnlocked()) loadDatabase();
+    });
+    const btnLock = document.getElementById('btnLockPage');
+    if (btnLock) {
+        btnLock.addEventListener('click', lockSite);
+    }
     document.getElementById('searchInput').addEventListener('input', filterItems);
     document.getElementById('statusFilter').addEventListener('change', filterItems);
     
@@ -86,8 +146,75 @@ function bindEvents() {
     });
 }
 
+function bindAuthEvents() {
+    const authForm = document.getElementById('authForm');
+    if (authForm) {
+        authForm.addEventListener('submit', handleAuthSubmit);
+    }
+
+    const btnEye = document.getElementById('btnToggleEye');
+    if (btnEye) {
+        btnEye.addEventListener('click', () => {
+            const input = document.getElementById('sitePasswordInput');
+            if (!input) return;
+            if (input.type === 'password') {
+                input.type = 'text';
+                btnEye.innerText = '🙈';
+            } else {
+                input.type = 'password';
+                btnEye.innerText = '👁️';
+            }
+        });
+    }
+}
+
+async function handleAuthSubmit(e) {
+    e.preventDefault();
+    const input = document.getElementById('sitePasswordInput');
+    const errorMsg = document.getElementById('authErrorMsg');
+    const card = document.querySelector('.auth-card');
+    const val = input.value;
+
+    if (!val) return;
+
+    const hash = await computeSHA256(val);
+    const targetHash = getTargetAuthHash();
+
+    if (hash === targetHash) {
+        sessionStorage.setItem('ag_auth_unlocked', 'true');
+        if (errorMsg) {
+            errorMsg.classList.remove('visible');
+            errorMsg.innerText = '';
+        }
+        updateAuthUI();
+        showToast('🔓 驗證成功，歡迎進入！', 'success');
+        loadDatabase();
+    } else {
+        if (errorMsg) {
+            errorMsg.innerText = '❌ 密碼錯誤，請重新輸入！';
+            errorMsg.classList.add('visible');
+        }
+        if (card) {
+            card.classList.remove('shake');
+            void card.offsetWidth;
+            card.classList.add('shake');
+        }
+        input.select();
+    }
+}
+
+function lockSite() {
+    sessionStorage.removeItem('ag_auth_unlocked');
+    updateAuthUI();
+    showToast('🔒 網站已鎖定', 'info');
+}
+
 // Load Database (data/index.json)
 async function loadDatabase() {
+    if (!isUnlocked()) {
+        updateAuthUI();
+        return;
+    }
     showToast('載入進度索引中...', 'info');
     try {
         let indexData = null;
