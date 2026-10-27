@@ -7,7 +7,7 @@
     <link rel="stylesheet" href="styles.css">
 </head>
 <body>
-    <div class="container">
+    <div class="container" id="mainContainer" style="display: none;">
         <!-- Header -->
         <header>
             <div class="brand">
@@ -16,6 +16,7 @@
             </div>
             <div class="header-actions">
                 <button class="btn btn-outline" id="btnRefresh">🔄 重新整理</button>
+                <button class="btn btn-outline" id="btnLockPage" title="鎖定頁面">🔒 鎖定</button>
                 <button class="btn btn-primary" id="btnToggleSettings">⚙️ GitHub 設定</button>
             </div>
         </header>
@@ -59,6 +60,10 @@
                     <div class="form-group">
                         <label>Personal Access Token (PAT)</label>
                         <input type="password" id="patToken" placeholder="ghp_xxxxxxxxxxxx" required>
+                    </div>
+                    <div class="form-group">
+                        <label>網站訪問密碼 (留空則維持預設)</label>
+                        <input type="password" id="customPassword" placeholder="輸入新密碼以覆蓋預設密碼">
                     </div>
                 </div>
                 <div style="margin-top: 16px; text-align: right;">
@@ -153,6 +158,28 @@
 
     <!-- Toast Notification Container -->
     <div class="toast-container" id="toastContainer"></div>
+
+    <!-- 🔒 存取密碼驗證全螢幕遮罩 (Password Gatekeeper) -->
+    <div class="auth-overlay" id="authOverlay">
+        <div class="auth-card">
+            <div class="auth-icon">🛡️</div>
+            <h2>內部學習進度庫</h2>
+            <p class="auth-desc">本作品展示網站已啟用存取保護，請輸入授權密碼以檢視內容。</p>
+            <form id="authForm">
+                <div class="auth-input-wrapper">
+                    <input type="password" id="sitePasswordInput" placeholder="請輸入訪問密碼" autocomplete="current-password" required autofocus>
+                    <button type="button" class="btn-toggle-eye" id="btnToggleEye" title="顯示/隱藏密碼">👁️</button>
+                </div>
+                <div class="auth-error-msg" id="authErrorMsg"></div>
+                <button type="submit" class="btn btn-primary btn-auth-submit">
+                    🔓 驗證並進入網站
+                </button>
+            </form>
+            <div class="auth-footer-note">
+                <span>🔐 SHA-256 安全保護</span>
+            </div>
+        </div>
+    </div>
 
     <script src="app.js"></script>
 </body>
