@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>體感黃金淘沙遊戲 (GOLD) - 工作進度與品質優化報告</title>
+  <style>
+    :root {
+      --bg: #0f172a;
+      --card-bg: #1e293b;
+      --card-border: #334155;
+      --primary: #f59e0b;
+      --primary-light: #fef3c7;
+      --accent: #38bdf8;
+      --text-main: #f8fafc;
+      --text-muted: #94a3b8;
+      --success: #10b981;
+      --danger: #ef4444;
+      --warning: #f59e0b;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+      background-color: var(--bg);
+      color: var(--text-main);
+      line-height: 1.6;
+      padding: 2.5rem 1.5rem;
+    }
+
+    .container {
+      max-width: 960px;
+      margin: 0 auto;
+    }
+
+    header {
+      background: linear-gradient(135deg, rgba(245, 158, 11, 0.15), rgba(56, 189, 248, 0.12));
+      border: 1px solid var(--card-border);
+      border-radius: 16px;
+      padding: 2.2rem;
+      margin-bottom: 2rem;
+      backdrop-filter: blur(8px);
+      box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.4);
+    }
+
+    .badge-bar {
+      display: flex;
+      gap: 0.6rem;
+      margin-bottom: 1rem;
+      flex-wrap: wrap;
+    }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 0.35rem;
+      padding: 0.35rem 0.85rem;
+      border-radius: 9999px;
+      font-size: 0.85rem;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.04em;
+    }
+
+    .badge-success {
+      background: rgba(16, 185, 129, 0.2);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.4);
+    }
+
+    .badge-primary {
+      background: rgba(245, 158, 11, 0.2);
+      color: #fbbf24;
+      border: 1px solid rgba(245, 158, 11, 0.4);
+    }
+
+    .badge-sky {
+      background: rgba(56, 189, 248, 0.2);
+      color: #7dd3fc;
+      border: 1px solid rgba(56, 189, 248, 0.4);
+    }
+
+    h1 {
+      font-size: 2.1rem;
+      font-weight: 800;
+      color: #ffffff;
+      margin-bottom: 0.5rem;
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+    }
+
+    .subtitle {
+      color: var(--text-muted);
+      font-size: 1.05rem;
+    }
+
+    .live-link-box {
+      margin-top: 1.5rem;
+      background: rgba(15, 23, 42, 0.6);
+      border: 1px dashed var(--primary);
+      border-radius: 10px;
+      padding: 1rem 1.4rem;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 1rem;
+    }
+
+    .live-link {
+      color: #fbbf24;
+      font-weight: bold;
+      text-decoration: none;
+      display: inline-flex;
+      align-items: center;
+      gap: 0.4rem;
+      transition: all 0.2s;
+    }
+
+    .live-link:hover {
+      color: #fde68a;
+      text-decoration: underline;
+    }
+
+    .grid-2 {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(440px, 1fr));
+      gap: 1.5rem;
+      margin-bottom: 2rem;
+    }
+
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--card-border);
+      border-radius: 14px;
+      padding: 1.8rem;
+      box-shadow: 0 4px 15px rgba(0, 0, 0, 0.2);
+    }
+
+    .card h2 {
+      font-size: 1.35rem;
+      font-weight: 700;
+      margin-bottom: 1.2rem;
+      display: flex;
+      align-items: center;
+      gap: 0.6rem;
+      color: #f8fafc;
+      border-bottom: 1px solid var(--card-border);
+      padding-bottom: 0.75rem;
+    }
+
+    .issue-item {
+      background: rgba(15, 23, 42, 0.5);
+      border-left: 4px solid var(--primary);
+      border-radius: 6px;
+      padding: 1rem;
+      margin-bottom: 1rem;
+    }
+
+    .issue-item.danger {
+      border-left-color: var(--danger);
+    }
+
+    .issue-item.success {
+      border-left-color: var(--success);
+    }
+
+    .issue-title {
+      font-weight: bold;
+      font-size: 1.02rem;
+      margin-bottom: 0.35rem;
+      display: flex;
+      align-items: center;
+      gap: 0.5rem;
+    }
+
+    .issue-desc {
+      font-size: 0.92rem;
+      color: var(--text-muted);
+    }
+
+    ul.clean-list {
+      list-style: none;
+    }
+
+    ul.clean-list li {
+      position: relative;
+      padding-left: 1.5rem;
+      margin-bottom: 0.75rem;
+      font-size: 0.95rem;
+      color: #cbd5e1;
+    }
+
+    ul.clean-list li::before {
+      content: "✔";
+      position: absolute;
+      left: 0;
+      color: var(--success);
+      font-weight: bold;
+    }
+
+    .timeline {
+      position: relative;
+      padding-left: 1.8rem;
+    }
+
+    .timeline::before {
+      content: "";
+      position: absolute;
+      left: 0.45rem;
+      top: 0.5rem;
+      bottom: 0.5rem;
+      width: 2px;
+      background: var(--card-border);
+    }
+
+    .timeline-node {
+      position: relative;
+      margin-bottom: 1.5rem;
+    }
+
+    .timeline-node::before {
+      content: "";
+      position: absolute;
+      left: -1.8rem;
+      top: 0.4rem;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: var(--accent);
+      box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.2);
+    }
+
+    .timeline-time {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    .timeline-title {
+      font-size: 1rem;
+      font-weight: bold;
+      color: #f1f5f9;
+      margin: 0.15rem 0;
+    }
+
+    .timeline-desc {
+      font-size: 0.9rem;
+      color: #94a3b8;
+    }
+
+    code {
+      background: rgba(0, 0, 0, 0.4);
+      color: #38bdf8;
+      padding: 0.2rem 0.45rem;
+      border-radius: 4px;
+      font-size: 0.88rem;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+
+    footer {
+      text-align: center;
+      margin-top: 3rem;
+      color: var(--text-muted);
+      font-size: 0.88rem;
+      border-top: 1px solid var(--card-border);
+      padding-top: 1.5rem;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="badge-bar">
+        <span class="badge badge-success">● 狀態：已全面完成 (Completed)</span>
+        <span class="badge badge-primary">⭐ 沉浸式體感淘金</span>
+        <span class="badge badge-sky">🌐 GitHub Pages 線上已同步</span>
+      </div>
+      <h1>🪙 體感黃金淘沙遊戲 - 效能與感官體驗全面升級</h1>
+      <p class="subtitle">針對主畫面卡死例外攔截、反向運動學手臂對稱性、5~8 秒黃金淘洗節奏與高擬真 ASMR 音效工程之修復與優化實裝報告。</p>
+
+      <div class="live-link-box">
+        <div>
+          <span style="color: #cbd5e1; font-size: 0.95rem;">線上直接體驗最新版本：</span><br>
+          <a class="live-link" href="https://951222-1.github.io/GOLD/" target="_blank">
+            👉 https://951222-1.github.io/GOLD/
+          </a>
+        </div>
+        <span style="font-size: 0.85rem; color: #94a3b8;">建議使用 <code>Ctrl + F5</code> 強制重新整理以載入最新快取</span>
+      </div>
+    </header>
+
+    <div class="grid-2">
+      <!-- 核心修復 -->
+      <div class="card">
+        <h2>🛠️ 關鍵故障診斷與修復</h2>
+
+        <div class="issue-item danger">
+          <div class="issue-title">1. 畫面卡死凍結（Screen Freeze Crash）</div>
+          <div class="issue-desc">
+            <strong>根因：</strong>先前的雙手繪圖程式碼在渲染中意外引用未定義變數 <code>sp</code>，導致拋出未捕獲例外；加上主迴圈缺乏守護，使 <code>requestAnimationFrame</code> 永久終止。<br>
+            <strong>解決：</strong>全面導入 <code>try ... finally</code> 確保動畫迴圈絕不中斷，並為雙手臂各別加入獨立容錯保護。
+          </div>
+        </div>
+
+        <div class="issue-item danger">
+          <div class="issue-title">2. 右手消失問題（Right Hand Missing）</div>
+          <div class="issue-desc">
+            <strong>根因：</strong>右手臂反向運動學（IK）錨點命名誤植為 <code>anchorLy</code>，呼叫時因找不到 <code>anchorRy</code> 而中斷右手渲染。<br>
+            <strong>解決：</strong>修正為正確之 <code>anchorRy</code>，使左右兩臂完美對稱握緊淘金盤兩緣。
+          </div>
+        </div>
+
+        <div class="issue-item success">
+          <div class="issue-title">3. GPU 運算負載減輕</div>
+          <div class="issue-desc">
+            淘金遊戲屬第一人稱視角，關閉冗餘的 PoseLandmarker，僅保留 HandLandmarker 追蹤，杜絕瀏覽器 GPU 負載爆表。
+          </div>
+        </div>
+      </div>
+
+      <!-- 體驗升級 -->
+      <div class="card">
+        <h2>✨ 感官體驗與節奏優化</h2>
+
+        <div class="issue-item success">
+          <div class="issue-title">1. 5 ～ 8 秒黃金淘洗韻律（Pacing）</div>
+          <div class="issue-desc">
+            告別一晃即空的過快速度，將洗淨時長調整至 <strong>5～8 秒</strong>（左右舒緩搖晃 8～10 次），帶來極致放鬆的淘洗沉浸感。
+          </div>
+        </div>
+
+        <div class="issue-item success">
+          <div class="issue-title">2. 三段式心理期待與即時引導</div>
+          <div class="issue-desc">
+            <strong>厚泥期（>65%）：</strong>「厚沙洗滌中…」甩出泥石。<br>
+            <strong>若隱若現期（65%~25%）：</strong>「✨ 隱約看到金光了！」底部寶物透出輪廓與閃爍星芒。<br>
+            <strong>破水期（<25%）：</strong>「🔥 即將破水而出！」金光大綻、破浪而出！
+          </div>
+        </div>
+
+        <div class="issue-item success">
+          <div class="issue-title">3. 高擬真 ASMR 音效與聲學防噪</div>
+          <div class="issue-desc">
+            完整整合 <code>清脆溪水拍打 ASMR</code>、<code>金幣清脆碰撞</code>、<code>廢鐵卡通音效</code>。<br>
+            <strong>舒緩定頻：</strong>溪水間隔放緩至 1.3 秒，防多重重疊噪聲，水波拍打清晰溫潤。
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 任務執行歷程 -->
+    <div class="card" style="margin-bottom: 2rem;">
+      <h2>📜 本次任務實施歷程</h2>
+      <div class="timeline">
+        <div class="timeline-node">
+          <div class="timeline-time">階段一 · 素材與骨架整合</div>
+          <div class="timeline-title">第一人稱雙手緊扣手勢更新</div>
+          <div class="timeline-desc">導入使用者新版手勢素材，進行透明化與羽化去背切片，以雙手反向運動學固定於金屬盤緣。</div>
+        </div>
+
+        <div class="timeline-node">
+          <div class="timeline-time">階段二 · 穩定性強化</div>
+          <div class="timeline-title">阻斷卡死根因與安全迴圈建立</div>
+          <div class="timeline-desc">排查並清除拋錯變數，主循環建構 <code>try ... finally</code>，單幀拋錯自動略過並維持 60 FPS 刷新。</div>
+        </div>
+
+        <div class="timeline-node">
+          <div class="timeline-time">階段三 · 節奏與期待感重塑</div>
+          <div class="timeline-title">淘洗 5~8 秒與三段式驚喜視覺</div>
+          <div class="timeline-desc">經過討論定案 5~8 秒理想時長，實裝混濁度漸層、微光呼吸閃芒與動態字牌回饋。</div>
+        </div>
+
+        <div class="timeline-node">
+          <div class="timeline-time">階段四 · 音效工程調校</div>
+          <div class="timeline-title">真實音效整合、增益放大與防噪聲優化</div>
+          <div class="timeline-desc">整合真實 MP3 音訊，Web Audio 增益拉升，設置 1300ms 舒緩間隔與交叉淡出，消除多軌重疊吵雜感。</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 成果交付 -->
+    <div class="card">
+      <h2>📦 交付項目與資源清單</h2>
+      <ul class="clean-list">
+        <li><strong>線上展示網址：</strong><a href="https://951222-1.github.io/GOLD/" target="_blank" style="color: #38bdf8;">https://951222-1.github.io/GOLD/</a></li>
+        <li><strong>GitHub 原始碼庫：</strong><a href="https://github.com/951222-1/GOLD.git" target="_blank" style="color: #38bdf8;">https://github.com/951222-1/GOLD.git</a></li>
+        <li><strong>核心邏輯檔案：</strong><code>src/modes/goldPanMode.js</code>（淘洗節奏、三段視覺、雙臂 IK）</li>
+        <li><strong>音訊服務核心：</strong><code>src/services/audio.js</code>（Web Audio 解碼、動態增益、防疊加機制）</li>
+        <li><strong>守護主迴圈：</strong><code>src/main.js</code>（Safe Render Loop 異常防護與事件解鎖）</li>
+        <li><strong>外部真實音訊：</strong><code>public/audio/water_slosh.mp3</code>、<code>coin_clink.mp3</code>、<code>junk.mp3</code></li>
+      </ul>
+    </div>
+
+    <footer>
+      Antigravity Agentic Pair Programming · 體感黃金淘沙專案工作進度同步
+    </footer>
+  </div>
+</body>
+</html>
