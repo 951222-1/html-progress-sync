@@ -26,8 +26,15 @@
         
         <div class="flex items-center space-x-4">
             <div class="flex items-center space-x-2 bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-700">
-                <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" id="rt-status-dot"></span>
-                <span class="text-xs font-semibold text-slate-300" id="rt-status-text">Supabase Realtime 已連線</span>
+                <span class="w-2.5 h-2.5 rounded-full bg-slate-500" id="rt-status-dot"></span>
+                <span class="text-xs font-semibold text-slate-300" id="rt-status-text">尚未登入</span>
+            </div>
+            <div class="flex items-center space-x-2">
+                <label class="sr-only" for="caregiver-patient-code">個案代碼</label>
+                <input id="caregiver-patient-code" value="P001" maxlength="32" placeholder="個案代碼"
+                    class="w-24 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-100">
+                <button id="btn-connect-patient" type="button" onclick="connectToPatient()"
+                    class="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-xl font-bold">連線個案</button>
             </div>
             
             <button onclick="toggleAudioMute()" id="btn-toggle-sound" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-xl border border-slate-700 flex items-center space-x-1 transition">
@@ -179,7 +186,9 @@
     </main>
 
     <!-- 腳本引用 -->
-    <script src="config.js"></script>
-    <script src="caregiver.js"></script>
+    <script src="config.js?v=20261103_v7"></script>
+    <script src="connection-core.js?v=20261103_v7"></script>
+    <script src="auth-ui.js?v=20261103_v7"></script>
+    <script src="caregiver.js?v=20261103_v7"></script>
 </body>
 </html>

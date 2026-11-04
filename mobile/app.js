@@ -68,7 +68,9 @@ let supabaseClient = null;
 let currentPatient = { id: null, patient_code: 'P001', full_name: '王爺爺', diet_type: 'soft', baseline_chew: 0.85, baseline_swallow: 1.10 };
 let currentDiet = 'soft'; // regular, soft, pureed
 let isMealActive = false;
-let currentSessionId = null;
+const mealSessionTracker = window.ConnectionCore.createMealSessionTracker();
+const mealStartLock = window.ConnectionCore.createStartLock();
+let currentMealSessionInsertPromise = Promise.resolve(null);
 
 // 原版防哽咽狀態機常數與狀態 (ST_IDLE, ST_INGEST, ST_CHEW, ST_SWALLOW, ST_CHECK)
 const ST_IDLE = "IDLE";
@@ -153,15 +155,34 @@ const evidenceFusion = new EvidenceFusion(5.0, 1.0, 10.0);
 // WebRTC 串流連線變數
 let peerConnection = null;
 let supabaseChannel = null;
+let patientRealtimeReady = false;
+let lastStateBroadcastAt = 0;
+let activeNegotiationId = null;
+let activePeerClientId = null;
+let pendingPeerClientId = null;
+let activeOfferPayload = null;
+let peerOfferInProgress = false;
+let resendOfferAfterCreation = false;
+const remoteCandidateBuffer = window.ConnectionCore.createCandidateBuffer();
 
 // 初始化啟動 (安全支援 DOMContentLoaded 與已就緒狀態)
-function startApp() {
+async function startApp() {
     initSupabase();
     setupCanvasAndVideo();
     initMediaPipe();
-    openLoginModal();
-    if (window._selectedPatient) {
-        loginAsPatient(window._selectedPatient.code, window._selectedPatient.nameStr);
+    if (!supabaseClient) {
+        window.AuthUI.showSetupError('系統連線設定尚未完成。請聯絡管理者，不會以未受保護的離線模式繼續。');
+        return;
+    }
+    try {
+        await window.AuthUI.requireAuth(supabaseClient, '使用者端');
+        openLoginModal();
+        if (window._selectedPatient) {
+            await loginAsPatient(window._selectedPatient.code, window._selectedPatient.nameStr);
+        }
+    } catch (error) {
+        console.error('[Supabase Auth] User endpoint startup failed:', error);
+        window.AuthUI.showSetupError('登入服務暫時無法使用，請重新整理頁面後再試。');
     }
 }
 
@@ -174,12 +195,12 @@ if (document.readyState === 'loading') {
 // 2. Supabase Client 初始化
 function initSupabase() {
     try {
-        if (window.supabase && CONFIG.SUPABASE_URL && !CONFIG.SUPABASE_URL.includes('xyzcompany')) {
-            supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
-            console.log('[Supabase] Successfully connected to live backend.');
-        } else {
-            console.warn('[Supabase] Running in Standalone / Fallback mode.');
+        if (!window.supabase || !CONFIG.SUPABASE_URL || !CONFIG.SUPABASE_PUBLISHABLE_KEY) {
+            console.error('[Supabase] Required project URL or publishable key is missing.');
+            return;
         }
+        supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_PUBLISHABLE_KEY);
+        console.log('[Supabase] Client initialized; sign-in is required before data access.');
     } catch (e) {
         console.error('[Supabase] Initialization error:', e);
     }
@@ -213,55 +234,45 @@ function closeLoginModal() {
     }
 }
 
-function loginAsPatient(code, nameStr) {
+async function loginAsPatient(code, nameStr) {
     try {
-        console.log(`[Login] Selected patient: ${nameStr} (${code})`);
-        currentPatient.patient_code = code;
-        currentPatient.full_name = nameStr;
-        
+        if (!supabaseClient) throw new Error('Supabase client is unavailable.');
+        const { data: authData, error: authError } = await supabaseClient.auth.getUser();
+        if (authError || !authData.user) throw new Error('請先登入同一個照護帳號。');
+
+        const patientList = typeof window.getPatientList === 'function' ? window.getPatientList() : [];
+        const localPatient = patientList.find(patient => patient.code === code) || {};
+        const { data: profile, error: profileError } = await supabaseClient
+            .from('patient_profiles')
+            .upsert({
+                owner_id: authData.user.id,
+                patient_code: code,
+                full_name: nameStr || code,
+                gender: localPatient.gender || null,
+                diet_type: localPatient.diet || currentDiet || 'regular'
+            }, { onConflict: 'owner_id,patient_code' })
+            .select('*')
+            .single();
+        if (profileError) throw profileError;
+
+        currentPatient.id = profile.id;
+        currentPatient.patient_code = profile.patient_code;
+        currentPatient.full_name = profile.full_name;
+        currentPatient.diet_type = profile.diet_type || 'soft';
+        currentPatient.baseline_chew = profile.baseline_chew_duration || 0.85;
+        currentPatient.baseline_swallow = profile.baseline_swallow_pause || 1.10;
+        currentDiet = currentPatient.diet_type;
+        selectDiet(currentDiet);
+
+        console.log(`[Login] Selected patient: ${currentPatient.full_name} (${currentPatient.patient_code})`);
         const label = document.getElementById('current-patient-label');
-        if (label) label.innerText = `${nameStr} (${code})`;
-
-        // 1. 立即關閉對話框與更新選單 UI (絕不安靜卡死)
+        if (label) label.innerText = `${currentPatient.full_name} (${currentPatient.patient_code})`;
         closeLoginModal();
-
-        // 2. 異步非阻塞啟動相機
-        setTimeout(() => {
-            if (!isMealActive) {
-                startMealSession().catch(err => {
-                    console.warn('[Camera] Gracefully handled startup error:', err);
-                });
-            }
-        }, 30);
-
-        // 3. 背景非同步載入 Supabase 個案檔案與個人化基準
-        if (supabaseClient) {
-            supabaseClient
-                .from('patient_profiles')
-                .select('*')
-                .eq('patient_code', code)
-                .single()
-                .then(({ data }) => {
-                    if (data) {
-                        currentPatient.id = data.id;
-                        currentPatient.diet_type = data.diet_type || 'soft';
-                        currentPatient.baseline_chew = data.baseline_chew_duration || 0.85;
-                        currentPatient.baseline_swallow = data.baseline_swallow_pause || 1.10;
-                        selectDiet(currentPatient.diet_type);
-                        console.log(`[Supabase] Loaded patient baseline: chew=${data.baseline_chew_duration}s`);
-                    }
-                })
-                .catch((err) => {
-                    console.warn('[Supabase] Could not fetch profile, using local defaults:', err);
-                });
-        }
-
-        // 4. 初始化 WebRTC 信令頻道
-        setupWebRTCSignaling();
-
-    } catch (e) {
-        console.error('[Login] Error in loginAsPatient:', e);
-        closeLoginModal();
+        await startMealSession();
+    } catch (error) {
+        console.error('[Patient login] Could not prepare the shared patient profile:', error);
+        openLoginModal();
+        alert('無法連結此個案資料。請確認兩端使用同一個帳號，並稍後重試。');
     }
 }
 
@@ -423,6 +434,10 @@ async function startMealSession() {
         console.log('[Camera] Meal session already active.');
         return;
     }
+    if (!mealStartLock.tryEnter()) {
+        console.log('[Camera] Meal session startup is already in progress.');
+        return;
+    }
 
     try {
         webcamStream = await getWebcamStream();
@@ -484,19 +499,24 @@ async function startMealSession() {
         const mealStatusText = document.getElementById('meal-status-text');
         if (mealStatusText) mealStatusText.innerText = '用餐中 🍽️';
 
-        // 於 Supabase 寫入新用餐紀錄
+        // 於背景建立 Supabase 用餐紀錄，不阻塞即時影像偵測
         if (supabaseClient) {
-            try {
-                const { data } = await supabaseClient.from('meal_sessions').insert([{
+            currentMealSessionInsertPromise = mealSessionTracker.begin(async () => {
+                const { data, error } = await supabaseClient.from('meal_sessions').insert([{
                     patient_id: currentPatient.id,
                     diet_type: currentDiet,
                     start_time: new Date().toISOString(),
                     risk_level: 'NORMAL'
                 }]).select().single();
-                if (data) currentSessionId = data.id;
-            } catch (err) {
-                console.warn('[Supabase] Meal session log insert bypassed:', err);
-            }
+                if (error) throw error;
+                return data?.id || null;
+            }).catch(err => {
+                console.warn('[Supabase] Meal session log bypassed; this meal will not be attached to a previous session:', err);
+                return null;
+            });
+        } else {
+            mealSessionTracker.clear();
+            currentMealSessionInsertPromise = Promise.resolve(null);
         }
 
         // 開始影音串流與 WebRTC P2P
@@ -508,6 +528,12 @@ async function startMealSession() {
     } catch (err) {
         console.error('Camera/Mic permission failed:', err);
         isMealActive = false;
+        if (webcamStream) {
+            const stream = webcamStream;
+            webcamStream = null;
+            window.ConnectionCore.stopMediaStream(stream);
+        }
+        if (webcamVideo) webcamVideo.srcObject = null;
         const isSecure = window.isSecureContext;
         let hintMsg = "無法取得相機權限！\n\n";
         if (!isSecure) {
@@ -523,56 +549,114 @@ async function startMealSession() {
         if (mealStatusText) mealStatusText.innerText = '⚠️ 相機權限受限 (請允許後重試)';
         
         alert(hintMsg);
+    } finally {
+        mealStartLock.release();
     }
 }
 
 async function endMealSession() {
     if (!isMealActive) return;
-    isMealActive = false;
+    if (!mealStartLock.tryEnter()) {
+        console.log('[Camera] Meal startup or shutdown is already in progress.');
+        return;
+    }
 
-    // 計算總用餐時長與平均咀嚼時間
-    const endTime = new Date();
-    const durationSec = Math.round((endTime - mealMetrics.startTime) / 1000);
-    const avgChewTime = mealMetrics.chewDurations.length > 0 
-        ? (mealMetrics.chewDurations.reduce((a,b)=>a+b, 0) / mealMetrics.chewDurations.length) 
-        : currentPatient.baseline_chew;
+    const sessionInsertPromise = currentMealSessionInsertPromise;
+    let durationSec = 0;
+    let avgChewTime = currentPatient.baseline_chew;
+    try {
+        isMealActive = false;
 
-    // 更新 UI 狀態
-    document.getElementById('btn-start-meal').disabled = false;
-    document.getElementById('btn-start-meal').classList.remove('opacity-50', 'cursor-not-allowed');
-    document.getElementById('btn-end-meal').disabled = true;
-    document.getElementById('btn-end-meal').classList.add('opacity-50', 'cursor-not-allowed');
-    document.getElementById('meal-status-text').innerText = '用餐結束 ⏹️';
+        // 計算總用餐時長與平均咀嚼時間
+        const endTime = new Date();
+        durationSec = Math.round((endTime - mealMetrics.startTime) / 1000);
+        avgChewTime = mealMetrics.chewDurations.length > 0
+            ? (mealMetrics.chewDurations.reduce((a, b) => a + b, 0) / mealMetrics.chewDurations.length)
+            : currentPatient.baseline_chew;
 
-    // 寫入 Supabase 用餐場次總結與更新動態校正基準
-    if (supabaseClient && currentSessionId) {
-        try {
-            await supabaseClient.from('meal_sessions').update({
-                end_time: endTime.toISOString(),
-                total_duration_sec: durationSec,
-                total_chew_count: mealMetrics.totalChews,
-                avg_chew_duration: parseFloat(avgChewTime.toFixed(2)),
-                cough_count_l1: mealMetrics.coughCountL1,
-                cough_count_l2: mealMetrics.coughCountL2,
-                choking_events_l3: mealMetrics.chokingEventsL3,
-                pouching_events: mealMetrics.pouchingEvents,
-                risk_level: mealMetrics.riskLevel
-            }).eq('id', currentSessionId);
-
-            // 更新個案個人化動態基準 (3餐自適應平均值)
-            await updatePatientAdaptiveBaseline(avgChewTime);
-        } catch (err) {
-            console.warn('[Supabase] Failed to update session completion:', err);
+        // 關閉結束按鈕，保持開始按鈕鎖定，避免結束流程尚未完成就開始下一餐
+        const btnStart = document.getElementById('btn-start-meal');
+        const btnEnd = document.getElementById('btn-end-meal');
+        if (btnStart) {
+            btnStart.disabled = true;
+            btnStart.classList.add('opacity-50', 'cursor-not-allowed');
         }
-    }
+        if (btnEnd) {
+            btnEnd.disabled = true;
+            btnEnd.classList.add('opacity-50', 'cursor-not-allowed');
+        }
+        document.getElementById('meal-status-text').innerText = '用餐結束，正在儲存紀錄…';
 
-    // 關閉相機與 WebRTC
-    if (webcamStream) {
-        webcamStream.getTracks().forEach(t => t.stop());
-        webcamStream = null;
+        await window.ConnectionCore.finalizeMealSession(
+            sessionInsertPromise,
+            async () => {
+                // 先停止相機與信令，再等待資料庫 insert 完成
+                if (webcamStream) {
+                    const stream = webcamStream;
+                    webcamStream = null;
+                    stream.getTracks().forEach(track => {
+                        try { track.stop(); } catch (err) { console.warn('[Camera] Track stop failed:', err); }
+                    });
+                }
+                if (peerConnection) {
+                    const connection = peerConnection;
+                    peerConnection = null;
+                    try { connection.close(); } catch (err) { console.warn('[WebRTC] Peer close failed:', err); }
+                }
+                try {
+                    await broadcastSystemState(true, true);
+                } catch (err) {
+                    console.warn('[Realtime] Failed to broadcast meal stop:', err);
+                }
+                if (supabaseChannel) {
+                    const channel = supabaseChannel;
+                    supabaseChannel = null;
+                    try {
+                        await channel.unsubscribe();
+                    } catch (err) {
+                        console.warn('[Realtime] Failed to unsubscribe after meal:', err);
+                    }
+                }
+                patientRealtimeReady = false;
+                activeNegotiationId = null;
+                activePeerClientId = null;
+                pendingPeerClientId = null;
+                activeOfferPayload = null;
+                peerOfferInProgress = false;
+                resendOfferAfterCreation = false;
+                remoteCandidateBuffer.clear();
+                stopBuzzerSound();
+            },
+            async sessionId => {
+                if (!supabaseClient) return;
+                const { error } = await supabaseClient.from('meal_sessions').update({
+                    end_time: endTime.toISOString(),
+                    total_duration_sec: durationSec,
+                    total_chew_count: mealMetrics.totalChews,
+                    avg_chew_duration: parseFloat(avgChewTime.toFixed(2)),
+                    cough_count_l1: mealMetrics.coughCountL1,
+                    cough_count_l2: mealMetrics.coughCountL2,
+                    choking_events_l3: mealMetrics.chokingEventsL3,
+                    pouching_events: mealMetrics.pouchingEvents,
+                    risk_level: mealMetrics.riskLevel
+                }).eq('id', sessionId);
+                if (error) throw error;
+
+                // 更新個案個人化動態基準 (3餐自適應平均值)
+                await updatePatientAdaptiveBaseline(avgChewTime);
+            }
+        );
+    } catch (err) {
+        console.warn('[Supabase] Failed to finalize meal session:', err);
+    } finally {
+        mealSessionTracker.clear();
+        currentMealSessionInsertPromise = Promise.resolve(null);
+        document.getElementById('btn-start-meal').disabled = false;
+        document.getElementById('btn-start-meal').classList.remove('opacity-50', 'cursor-not-allowed');
+        document.getElementById('meal-status-text').innerText = '用餐結束 ⏹️';
+        alert(`用餐完成！\n總時間: ${durationSec} 秒\n累積咀嚼: ${mealMetrics.totalChews} 次\n平均單次咀嚼耗時: ${avgChewTime.toFixed(2)} 秒`);
+        mealStartLock.release();
     }
-    stopBuzzerSound();
-    alert(`用餐完成！\n總時間: ${durationSec} 秒\n累積咀嚼: ${mealMetrics.totalChews} 次\n平均單次咀嚼耗時: ${avgChewTime.toFixed(2)} 秒`);
 }
 
 // 6. Web Audio API 聲學分析
@@ -987,10 +1071,11 @@ function updateRiskBadge() {
 
 // 9. Supabase 日誌紀錄與動態基準更新
 async function logAnomalyToSupabase(level, msg) {
-    if (!supabaseClient || !currentSessionId) return;
+    const sessionId = mealSessionTracker.currentId;
+    if (!supabaseClient || !sessionId) return;
     try {
         await supabaseClient.from('anomaly_logs').insert([{
-            session_id: currentSessionId,
+            session_id: sessionId,
             event_type: level,
             jaw_velocity: parseFloat(mealMetrics.jawVelocity.toFixed(2)),
             audio_energy: 0.0,
@@ -1026,58 +1111,154 @@ async function updatePatientAdaptiveBaseline(newChewAvg) {
 
 // 10. WebRTC P2P 串流與 Supabase Realtime 信令
 function setupWebRTCSignaling() {
-    if (!supabaseClient) return;
+    if (!supabaseClient || !currentPatient.id || !window.ConnectionCore) return;
+    if (supabaseChannel) supabaseChannel.unsubscribe();
+    patientRealtimeReady = false;
+    remoteCandidateBuffer.clear();
+    activeNegotiationId = null;
+    activePeerClientId = null;
+    pendingPeerClientId = null;
+    activeOfferPayload = null;
     try {
-        supabaseChannel = supabaseClient.channel(`webrtc-${currentPatient.patient_code}`);
+        const topic = window.ConnectionCore.channelTopic(currentPatient.id);
+        supabaseChannel = supabaseClient.channel(topic, window.ConnectionCore.privateChannelOptions());
         supabaseChannel
             .on('broadcast', { event: 'signal' }, async ({ payload }) => {
-                if (payload.type === 'answer' && peerConnection) {
+                if (payload.type === 'request_offer' && payload.profileId === currentPatient.id && payload.clientId) {
+                    await startPeerConnection(payload.clientId);
+                } else if (payload.type === 'answer' && peerConnection) {
+                    if (payload.negotiationId !== activeNegotiationId || payload.clientId !== activePeerClientId) return;
                     await peerConnection.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-                } else if (payload.type === 'candidate' && peerConnection) {
-                    await peerConnection.addIceCandidate(new RTCIceCandidate(payload.candidate));
+                    activeOfferPayload = null;
+                    await flushRemoteCandidates(peerConnection, activeNegotiationId, activePeerClientId);
+                } else if (payload.type === 'candidate') {
+                    await receiveRemoteCandidate(payload);
                 }
             })
-            .subscribe();
-    } catch (e) {}
+            .subscribe((status) => {
+                patientRealtimeReady = status === 'SUBSCRIBED';
+                if (status === 'SUBSCRIBED' && supabaseChannel) {
+                    supabaseChannel.send({
+                        type: 'broadcast',
+                        event: 'signal',
+                        payload: { type: 'patient_ready', profileId: currentPatient.id }
+                    });
+                } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+                    console.warn('[Realtime] Patient channel status:', status);
+                }
+            });
+    } catch (error) {
+        patientRealtimeReady = false;
+        console.error('[Realtime] Patient channel setup failed:', error);
+    }
 }
 
-async function startPeerConnection() {
+async function receiveRemoteCandidate(payload) {
+    if (!payload?.candidate || !payload.negotiationId || payload.clientId !== activePeerClientId) return;
+    if (activeNegotiationId && payload.negotiationId !== activeNegotiationId) return;
+    if (!peerConnection || !peerConnection.remoteDescription) {
+        remoteCandidateBuffer.enqueue(payload);
+        return;
+    }
     try {
-        peerConnection = new RTCPeerConnection(CONFIG.RTC_CONFIG);
-        
-        if (webcamStream) {
-            webcamStream.getTracks().forEach(track => peerConnection.addTrack(track, webcamStream));
-        }
+        await peerConnection.addIceCandidate(new RTCIceCandidate(payload.candidate));
+    } catch (error) {
+        console.warn('[WebRTC] Candidate was not accepted:', error);
+    }
+}
 
-        peerConnection.onicecandidate = (event) => {
-            if (event.candidate && supabaseChannel) {
-                supabaseChannel.send({
+async function flushRemoteCandidates(connection, negotiationId, clientId) {
+    const pending = window.ConnectionCore.takeMatchingCandidates(remoteCandidateBuffer, negotiationId, clientId);
+    for (const payload of pending) {
+        if (!payload.candidate) continue;
+        try {
+            await connection.addIceCandidate(new RTCIceCandidate(payload.candidate));
+        } catch (error) {
+            console.warn('[WebRTC] Buffered candidate was not accepted:', error);
+        }
+    }
+}
+
+async function sendActiveOffer() {
+    if (!supabaseChannel || !patientRealtimeReady || !activeOfferPayload) return;
+    const status = await supabaseChannel.send({
+        type: 'broadcast',
+        event: 'signal',
+        payload: activeOfferPayload
+    });
+    if (status !== 'ok') console.warn('[WebRTC] Offer send status:', status);
+}
+
+async function startPeerConnection(clientId) {
+    if (!webcamStream || !supabaseChannel || !patientRealtimeReady || !clientId) return;
+    if (peerOfferInProgress) {
+        if (clientId === activePeerClientId) resendOfferAfterCreation = true;
+        else pendingPeerClientId = clientId;
+        return;
+    }
+    const connectionState = peerConnection && peerConnection.connectionState;
+    const reusable = peerConnection && !['failed', 'closed', 'disconnected'].includes(connectionState);
+    if (reusable && activePeerClientId === clientId) {
+        if (activeOfferPayload) await sendActiveOffer();
+        return;
+    }
+
+    if (peerConnection) peerConnection.close();
+    remoteCandidateBuffer.clear();
+    activePeerClientId = clientId;
+    activeNegotiationId = crypto.randomUUID();
+    activeOfferPayload = null;
+    resendOfferAfterCreation = false;
+    peerOfferInProgress = true;
+    try {
+        const negotiationId = activeNegotiationId;
+        peerConnection = new RTCPeerConnection(CONFIG.RTC_CONFIG);
+        webcamStream.getTracks().forEach(track => peerConnection.addTrack(track, webcamStream));
+
+        peerConnection.onicecandidate = async (event) => {
+            if (event.candidate && supabaseChannel && patientRealtimeReady) {
+                await supabaseChannel.send({
                     type: 'broadcast',
                     event: 'signal',
-                    payload: { type: 'candidate', candidate: event.candidate }
+                    payload: { type: 'candidate', candidate: event.candidate, negotiationId, clientId }
                 });
             }
         };
 
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
-
-        if (supabaseChannel) {
-            supabaseChannel.send({
-                type: 'broadcast',
-                event: 'signal',
-                payload: { type: 'offer', sdp: offer }
-            });
+        activeOfferPayload = { type: 'offer', sdp: offer, negotiationId, clientId };
+        await sendActiveOffer();
+    } catch (error) {
+        if (peerConnection) peerConnection.close();
+        peerConnection = null;
+        activeNegotiationId = null;
+        activePeerClientId = null;
+        activeOfferPayload = null;
+        resendOfferAfterCreation = false;
+        console.error('[WebRTC] PeerConnection offer error:', error);
+    } finally {
+        peerOfferInProgress = false;
+        const pendingClient = pendingPeerClientId;
+        pendingPeerClientId = null;
+        if (pendingClient && pendingClient !== activePeerClientId) {
+            await startPeerConnection(pendingClient);
+            return;
         }
-    } catch (e) {
-        console.warn('[WebRTC] PeerConnection offer error:', e);
+        if (resendOfferAfterCreation && activeOfferPayload) {
+            resendOfferAfterCreation = false;
+            await sendActiveOffer();
+        }
     }
 }
 
-function broadcastSystemState() {
-    if (!supabaseChannel) return;
+async function broadcastSystemState(force = false, sessionEnded = false) {
+    if (!supabaseChannel || !patientRealtimeReady) return;
+    const now = performance.now();
+    if (!force && now - lastStateBroadcastAt < 250) return;
+    lastStateBroadcastAt = now;
     try {
-        supabaseChannel.send({
+        await supabaseChannel.send({
             type: 'broadcast',
             event: 'state_update',
             payload: {
@@ -1089,11 +1270,14 @@ function broadcastSystemState() {
                 jawVelocity: parseFloat(mealMetrics.jawVelocity.toFixed(2)),
                 pouchingEvents: mealMetrics.pouchingEvents,
                 coughEvents: (mealMetrics.coughCount || 0) + (mealMetrics.coughCountL2 || 0),
-                activeAlertLevel: activeAlertLevel,
-                isHandOnNeck: isHandOnNeck
+                activeAlertLevel: sessionEnded ? null : activeAlertLevel,
+                isHandOnNeck: isHandOnNeck,
+                sessionEnded
             }
         });
-    } catch (e) {}
+    } catch (error) {
+        console.warn('[Realtime] State broadcast failed:', error);
+    }
 }
 
 // =============================================================================
