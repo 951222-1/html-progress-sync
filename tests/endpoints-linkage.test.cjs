@@ -23,6 +23,18 @@ test('browser config uses the project publishable key and contains no privileged
   assert.equal(/SUPABASE_SERVICE_ROLE|sb_secret_|service_role|xyzcompany/.test(config), false, 'privileged or placeholder key found');
 });
 
+test('patient and caregiver scripts use one release-specific cache-bust version', () => {
+  const versions = page => [...page.matchAll(/<script src="[^"]+\.js\?v=([^"]+)"/g)].map(match => match[1]);
+  const patientVersions = versions(patientPage);
+  const caregiverVersions = versions(caregiverPage);
+  assert.equal(patientVersions.length, 4);
+  assert.equal(caregiverVersions.length, 4);
+  assert.equal(new Set(patientVersions).size, 1);
+  assert.equal(new Set(caregiverVersions).size, 1);
+  assert.equal(patientVersions[0], caregiverVersions[0]);
+  assert.match(patientVersions[0], /^\d{8}_[a-f0-9]{7}$/);
+});
+
 test('both endpoints load shared authentication and private-channel support', () => {
   assert.match(patientPage, /auth-ui\.js/);
   assert.match(caregiverPage, /auth-ui\.js/);
