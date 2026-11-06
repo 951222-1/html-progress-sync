@@ -4,17 +4,9 @@
  */
 
 let supabaseClient = null;
-let currentPatientCode = null;
-let currentPatientProfileId = null;
-let caregiverClientId = null;
+let currentPatientCode = 'P001';
 let peerConnection = null;
 let supabaseChannel = null;
-let lastOfferRequestAt = 0;
-let lastLoggedAlertLevel = null;
-let activeNegotiationId = null;
-let currentAnswerPayload = null;
-const remoteCandidateBuffer = window.ConnectionCore.createCandidateBuffer();
-const negotiationGate = window.ConnectionCore.createNegotiationGate();
 let audioMuted = false;
 let audioCtx = null;
 let buzzerInterval = null;
@@ -25,106 +17,27 @@ let chewTrendChart = null;
 
 document.addEventListener('DOMContentLoaded', async () => {
     initSupabase();
-    if (!supabaseClient) {
-        setRealtimeStatus('Supabase 設定未完成', false);
-        window.AuthUI.showSetupError('系統連線設定尚未完成。請聯絡管理者，不會顯示示範資料或未授權資料。');
-        return;
-    }
-    try {
-        await window.AuthUI.requireAuth(supabaseClient, '照護者端');
-        initCharts();
-        const codeInput = document.getElementById('caregiver-patient-code');
-        const initialCode = new URLSearchParams(location.search).get('patient') || (codeInput && codeInput.value) || 'P001';
-        if (codeInput) codeInput.value = initialCode;
-        document.getElementById('btn-connect-patient')?.addEventListener('click', () => connectToPatient());
-        await connectToPatient(initialCode, { quiet: true });
-    } catch (error) {
-        console.error('[Caregiver] Startup failed:', error);
-        setRealtimeStatus('登入／連線失敗', false);
-        window.AuthUI.showSetupError('照護者端無法連線。請確認兩端使用同一個帳號，並重新整理。');
-    }
+    initCharts();
+    await loadPatientProfile(currentPatientCode);
+    await fetchHistoricalSessions(currentPatientCode);
+    setupWebRTCSignaling();
 });
 
+// 1. Supabase Client 初始化
 function initSupabase() {
     try {
-        if (!window.supabase || !CONFIG.SUPABASE_URL || !CONFIG.SUPABASE_PUBLISHABLE_KEY) {
-            console.error('[Caregiver Supabase] Project URL or publishable key is missing.');
-            return;
+        if (window.supabase && CONFIG.SUPABASE_URL && !CONFIG.SUPABASE_URL.includes('xyzcompany')) {
+            supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+            console.log('[Caregiver Supabase] Connected to live backend.');
+        } else {
+            console.warn('[Caregiver Supabase] Running in Standalone / Fallback mode.');
         }
-        supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_PUBLISHABLE_KEY);
-        console.log('[Caregiver Supabase] Client initialized; sign-in is required.');
     } catch (e) {
         console.error('[Caregiver Supabase] Init error:', e);
     }
 }
 
-function setRealtimeStatus(text, connected) {
-    const label = document.getElementById('rt-status-text');
-    const dot = document.getElementById('rt-status-dot');
-    if (label) label.innerText = text;
-    if (dot) {
-        dot.className = connected
-            ? 'w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse'
-            : 'w-2.5 h-2.5 rounded-full bg-slate-500';
-    }
-}
-async function connectToPatient(code = document.getElementById('caregiver-patient-code')?.value, options = {}) {
-    const normalizedCode = String(code || '').trim();
-    const button = document.getElementById('btn-connect-patient');
-    try {
-        if (!supabaseClient || !window.ConnectionCore) throw new Error('連線設定未完成。');
-        if (!/^[A-Za-z0-9_-]{1,32}$/.test(normalizedCode)) throw new Error('個案代碼格式錯誤。');
-        if (supabaseChannel) {
-            await supabaseChannel.unsubscribe();
-            supabaseChannel = null;
-        }
-        if (peerConnection) {
-            peerConnection.close();
-            peerConnection = null;
-        }
-        currentPatientCode = null;
-        currentPatientProfileId = null;
-        caregiverClientId = null;
-        activeNegotiationId = null;
-        currentAnswerPayload = null;
-        remoteCandidateBuffer.clear();
-        if (button) button.disabled = true;
-        setRealtimeStatus('查詢個案資料…', false);
-        const { data: profile, error } = await supabaseClient
-            .from('patient_profiles')
-            .select('*')
-            .eq('patient_code', normalizedCode)
-            .maybeSingle();
-        if (error) throw error;
-        if (!profile) {
-            setRealtimeStatus('尚無此個案資料', false);
-            if (!options.quiet) alert('找不到此個案。請先在使用者端以相同帳號選擇個案並開始用餐，再回來連線。');
-            return false;
-        }
-        currentPatientCode = profile.patient_code;
-        currentPatientProfileId = profile.id;
-        caregiverClientId = crypto.randomUUID();
-        lastOfferRequestAt = 0;
-        document.getElementById('caregiver-patient-name').innerText = `${profile.full_name} (${profile.patient_code})`;
-        document.getElementById('caregiver-diet-type').innerText = (CONFIG.DIET_PROFILES[profile.diet_type] || {}).name || profile.diet_type;
-        document.getElementById('base-chew-sec').innerText = `${Number(profile.baseline_chew_duration || 0.85).toFixed(2)} 秒`;
-        document.getElementById('base-swallow-sec').innerText = `${Number(profile.baseline_swallow_pause || 1.10).toFixed(2)} 秒`;
-        if (button) button.innerText = `已選 ${profile.patient_code}`;
-        await fetchHistoricalSessions(normalizedCode, profile.id);
-        await setupWebRTCSignaling(profile.id);
-        return true;
-    } catch (error) {
-        console.error('[Caregiver] Patient connection failed:', error);
-        setRealtimeStatus('連線失敗，請重試', false);
-        if (!options.quiet) alert('個案連線失敗。請確認個案代碼與兩端登入帳號相同。');
-        return false;
-    } finally {
-        if (button) button.disabled = false;
-    }
-}
-
-window.connectToPatient = connectToPatient;
-
+// 2. 載入個案檔案與動態校正基準
 async function loadPatientProfile(code) {
     if (supabaseClient) {
         try {
@@ -145,28 +58,34 @@ async function loadPatientProfile(code) {
 }
 
 // 3. 載入個案歷史用餐場次數據與繪製圖表
-async function fetchHistoricalSessions(code, patientId = null) {
+async function fetchHistoricalSessions(code) {
     let sessionData = [];
-    try {
-        if (!patientId) {
-            const { data: profile, error: profileError } = await supabaseClient
-                .from('patient_profiles').select('id').eq('patient_code', code).maybeSingle();
-            if (profileError) throw profileError;
-            patientId = profile?.id;
-        }
-        if (patientId) {
-            const { data, error } = await supabaseClient
-                .from('meal_sessions')
-                .select('*')
-                .eq('patient_id', patientId)
-                .order('created_at', { ascending: false })
-                .limit(7);
-            if (error) throw error;
-            sessionData = window.ConnectionCore.latestSessionsChronological(data || [], 7);
-        }
-    } catch (error) {
-        console.error('[Caregiver] Could not load session history:', error);
+    if (supabaseClient) {
+        try {
+            const { data: profile } = await supabaseClient.from('patient_profiles').select('id').eq('patient_code', code).single();
+            if (profile) {
+                const { data } = await supabaseClient
+                    .from('meal_sessions')
+                    .select('*')
+                    .eq('patient_id', profile.id)
+                    .order('created_at', { ascending: true })
+                    .limit(7);
+                if (data) sessionData = data;
+            }
+        } catch (e) {}
     }
+
+    // 若無 Supabase 資料，提供豐富測試數據繪圖
+    if (sessionData.length === 0) {
+        sessionData = [
+            { created_at: '餐次 1', pouching_events: 1, cough_count_l2: 0, avg_chew_duration: 0.82 },
+            { created_at: '餐次 2', pouching_events: 0, cough_count_l2: 0, avg_chew_duration: 0.86 },
+            { created_at: '餐次 3', pouching_events: 2, cough_count_l2: 1, avg_chew_duration: 0.58 },
+            { created_at: '餐次 4', pouching_events: 0, cough_count_l2: 0, avg_chew_duration: 0.84 },
+            { created_at: '餐次 5', pouching_events: 1, cough_count_l2: 0, avg_chew_duration: 0.88 }
+        ];
+    }
+
     updateCharts(sessionData);
 }
 
@@ -234,119 +153,33 @@ function updateCharts(sessions) {
 }
 
 // 5. WebRTC P2P 影音接收與 Supabase Realtime 信令
-async function setupWebRTCSignaling(profileId = currentPatientProfileId) {
-    if (!supabaseClient || !profileId || !window.ConnectionCore) return;
+function setupWebRTCSignaling() {
+    if (!supabaseClient) return;
     try {
-        if (supabaseChannel) await supabaseChannel.unsubscribe();
-        activeNegotiationId = null;
-        currentAnswerPayload = null;
-        remoteCandidateBuffer.clear();
-        setRealtimeStatus(`正在連線 ${currentPatientCode}…`, false);
-        const channel = supabaseClient.channel(
-            window.ConnectionCore.channelTopic(profileId),
-            window.ConnectionCore.privateChannelOptions()
-        );
-        supabaseChannel = channel;
-        channel
+        supabaseChannel = supabaseClient.channel(`webrtc-${currentPatientCode}`);
+        
+        supabaseChannel
             .on('broadcast', { event: 'signal' }, async ({ payload }) => {
-                if (payload.type === 'patient_ready' && payload.profileId === currentPatientProfileId) {
-                    requestOffer(channel, true);
-                } else if (payload.type === 'offer' && payload.negotiationId && payload.clientId === caregiverClientId) {
-                    await handleOfferAndAnswer(payload.sdp, payload.negotiationId, payload.clientId);
-                } else if (payload.type === 'candidate') {
-                    await receiveRemoteCandidate(payload);
+                if (payload.type === 'offer') {
+                    await handleOfferAndAnswer(payload.sdp);
+                } else if (payload.type === 'candidate' && peerConnection) {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(payload.candidate));
                 }
             })
             .on('broadcast', { event: 'state_update' }, ({ payload }) => {
-                if (payload.patientCode === currentPatientCode) handleStateUpdate(payload);
+                handleStateUpdate(payload);
             })
-            .subscribe((status) => {
-                if (status === 'SUBSCRIBED') {
-                    setRealtimeStatus(`已連線 ${currentPatientCode}，等待使用者端…`, true);
-                    requestOffer(channel);
-                } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-                    setRealtimeStatus(`連線失敗：${status}`, false);
-                }
-            });
-    } catch (error) {
-        setRealtimeStatus('Realtime 頻道建立失敗', false);
-        console.error('[WebRTC Signalling] Caregiver channel error:', error);
+            .subscribe();
+
+    } catch (e) {
+        console.warn('[WebRTC Signalling] Caregiver channel error:', e);
     }
 }
 
-function requestOffer(channel, force = false) {
-    if (channel !== supabaseChannel || !currentPatientProfileId) return;
-    const now = Date.now();
-    if (!force && now - lastOfferRequestAt < 500) return;
-    lastOfferRequestAt = now;
-    channel.send({
-        type: 'broadcast',
-        event: 'signal',
-        payload: { type: 'request_offer', profileId: currentPatientProfileId, clientId: caregiverClientId }
-    }).then(result => {
-        if (result !== 'ok') console.warn('[WebRTC] Offer request status:', result);
-    });
-}
-
-async function receiveRemoteCandidate(payload) {
-    if (!payload?.candidate || !payload.negotiationId || payload.clientId !== caregiverClientId) return;
-    if (activeNegotiationId && payload.negotiationId === activeNegotiationId && peerConnection?.remoteDescription) {
-        try {
-            await peerConnection.addIceCandidate(new RTCIceCandidate(payload.candidate));
-        } catch (error) {
-            console.warn('[WebRTC] Candidate was not accepted:', error);
-        }
-        return;
-    }
-    remoteCandidateBuffer.enqueue(payload);
-}
-
-async function flushRemoteCandidates(connection, negotiationId, clientId) {
-    const pending = window.ConnectionCore.takeMatchingCandidates(remoteCandidateBuffer, negotiationId, clientId);
-    for (const payload of pending) {
-        if (!payload.candidate) continue;
-        try {
-            await connection.addIceCandidate(new RTCIceCandidate(payload.candidate));
-        } catch (error) {
-            console.warn('[WebRTC] Buffered candidate was not accepted:', error);
-        }
-    }
-}
-
-async function sendActiveAnswer() {
-    if (!supabaseChannel || !currentAnswerPayload) return;
-    const result = await supabaseChannel.send({
-        type: 'broadcast',
-        event: 'signal',
-        payload: currentAnswerPayload
-    });
-    if (result !== 'ok') console.warn('[WebRTC] Answer send status:', result);
-}
-
-async function handleOfferAndAnswer(offerSdp, negotiationId, clientId) {
-    if (!negotiationId || !clientId || clientId !== caregiverClientId) return;
-    if (activeNegotiationId === negotiationId && currentAnswerPayload) {
-        await sendActiveAnswer();
-        return;
-    }
-    return negotiationGate.run(`${clientId}:${negotiationId}`, async () => {
-        if (activeNegotiationId === negotiationId && currentAnswerPayload) {
-            await sendActiveAnswer();
-            return;
-        }
-        await processOfferAndAnswer(offerSdp, negotiationId, clientId);
-    });
-}
-
-async function processOfferAndAnswer(offerSdp, negotiationId, clientId) {
-    const pending = remoteCandidateBuffer.drain();
-    pending.filter(payload => payload.negotiationId === negotiationId && payload.clientId === clientId)
-        .forEach(payload => remoteCandidateBuffer.enqueue(payload));
+async function handleOfferAndAnswer(offerSdp) {
     try {
-        if (peerConnection) peerConnection.close();
-        activeNegotiationId = negotiationId;
-        currentAnswerPayload = null;
         peerConnection = new RTCPeerConnection(CONFIG.RTC_CONFIG);
+
         peerConnection.ontrack = (event) => {
             const remoteVideo = document.getElementById('remote-video');
             if (remoteVideo && event.streams && event.streams[0]) {
@@ -355,30 +188,30 @@ async function processOfferAndAnswer(offerSdp, negotiationId, clientId) {
                 console.log('[WebRTC P2P] Video stream attached successfully!');
             }
         };
-        peerConnection.onconnectionstatechange = () => {
-            const state = peerConnection && peerConnection.connectionState;
-            if (state === 'connected') setRealtimeStatus(`視訊已連線 ${currentPatientCode}`, true);
-            else if (state === 'failed' || state === 'disconnected') setRealtimeStatus(`視訊${state === 'failed' ? '連線失敗' : '中斷'}`, false);
-        };
-        const activeConnection = peerConnection;
-        activeConnection.onicecandidate = async (event) => {
+
+        peerConnection.onicecandidate = (event) => {
             if (event.candidate && supabaseChannel) {
-                await supabaseChannel.send({
+                supabaseChannel.send({
                     type: 'broadcast',
                     event: 'signal',
-                    payload: { type: 'candidate', candidate: event.candidate, negotiationId, clientId }
+                    payload: { type: 'candidate', candidate: event.candidate }
                 });
             }
         };
-        await activeConnection.setRemoteDescription(new RTCSessionDescription(offerSdp));
-        await flushRemoteCandidates(activeConnection, negotiationId, clientId);
-        const answer = await activeConnection.createAnswer();
-        await activeConnection.setLocalDescription(answer);
-        currentAnswerPayload = { type: 'answer', sdp: answer, negotiationId, clientId };
-        await sendActiveAnswer();
-    } catch (error) {
-        console.error('[WebRTC Answer Error]:', error);
-        setRealtimeStatus('視訊協商失敗', false);
+
+        await peerConnection.setRemoteDescription(new RTCSessionDescription(offerSdp));
+        const answer = await peerConnection.createAnswer();
+        await peerConnection.setLocalDescription(answer);
+
+        if (supabaseChannel) {
+            supabaseChannel.send({
+                type: 'broadcast',
+                event: 'signal',
+                payload: { type: 'answer', sdp: answer }
+            });
+        }
+    } catch (e) {
+        console.error('[WebRTC Answer Error]:', e);
     }
 }
 
@@ -396,24 +229,12 @@ function handleStateUpdate(state) {
         document.getElementById('caregiver-diet-type').innerText = dietInfo.name;
     }
 
+    // 若收到 Level 2, L3, L4 警報
     if (state.activeAlertLevel) {
         showCaregiverAlert(state.activeAlertLevel);
-        if (state.activeAlertLevel !== lastLoggedAlertLevel) {
-            addRealtimeLog(state.activeAlertLevel, `${state.patientName} 觸發 ${state.activeAlertLevel} 警報！`);
-            lastLoggedAlertLevel = state.activeAlertLevel;
-        }
+        addRealtimeLog(state.activeAlertLevel, `${state.patientName} 觸發 ${state.activeAlertLevel} 警報！`);
     } else {
         hideCaregiverAlert();
-        lastLoggedAlertLevel = null;
-    }
-    if (state.sessionEnded) {
-        const remoteVideo = document.getElementById('remote-video');
-        if (remoteVideo) {
-            remoteVideo.pause();
-            remoteVideo.srcObject = null;
-        }
-        document.getElementById('no-stream-placeholder').classList.remove('hidden');
-        setRealtimeStatus(`用餐結束：${currentPatientCode}`, true);
     }
 }
 
@@ -433,27 +254,22 @@ function hideCaregiverAlert() {
 function addRealtimeLog(level, msg) {
     const container = document.getElementById('realtime-log-container');
     const emptyMsg = document.getElementById('empty-log-msg');
-    if (!container) return;
     if (emptyMsg) emptyMsg.remove();
 
     const nowStr = new Date().toTimeString().split(' ')[0];
     const logItem = document.createElement('div');
     logItem.className = 'bg-slate-800/80 p-3 rounded-2xl border border-slate-700/60 flex items-center justify-between text-xs animate-fade-in';
+    
+    const colorClass = level === 'L4' ? 'text-rose-400 font-bold' : (level === 'L2' ? 'text-amber-400 font-bold' : 'text-blue-400');
+    
+    logItem.innerHTML = `
+        <div class="flex items-center space-x-2">
+            <span class="font-mono text-slate-500">${nowStr}</span>
+            <span class="${colorClass}">${msg}</span>
+        </div>
+        <span class="text-[10px] bg-slate-900 px-2 py-0.5 rounded text-slate-400 border border-slate-700">${level}</span>
+    `;
 
-    const left = document.createElement('div');
-    left.className = 'flex items-center space-x-2';
-    const timeLabel = document.createElement('span');
-    timeLabel.className = 'font-mono text-slate-500';
-    timeLabel.textContent = nowStr;
-    const messageSpan = document.createElement('span');
-    messageSpan.className = level === 'L4' ? 'text-rose-400 font-bold' : (level === 'L2' ? 'text-amber-400 font-bold' : 'text-blue-400');
-    messageSpan.textContent = msg;
-    left.append(timeLabel, messageSpan);
-
-    const badge = document.createElement('span');
-    badge.className = 'text-[10px] bg-slate-900 px-2 py-0.5 rounded text-slate-400 border border-slate-700';
-    badge.textContent = level;
-    logItem.append(left, badge);
     container.insertBefore(logItem, container.firstChild);
 }
 
