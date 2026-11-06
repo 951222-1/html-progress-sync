@@ -175,10 +175,8 @@ test('anomaly logger waits for the active meal insert before attaching an event'
   assert.equal(inserts[0].hands_on_neck, false);
 });
 
-test('patient meal records per-swallow pauses and marks the new event schema version', () => {
-  assert.match(patientJs, /createSwallowPauseTracker\(\)/);
-  assert.match(patientJs, /swallowPauseTracker\.record\(currentTime - stateStartTime\)/);
-  assert.match(patientJs, /avg_swallow_pause:\s*swallowPauseTracker\.snapshot\(\)\.average/);
+test('patient meal persists swallow count and marks the new event schema version', () => {
+  assert.match(patientJs, /total_swallow_count:\s*mealMetrics\.swallowCount\s*\|\|\s*0/);
   assert.match(patientJs, /event_schema_version:\s*2/);
 });
 
@@ -212,22 +210,19 @@ test('caregiver charts separate alert events and use the selected patient baseli
   const context = {
     anomaliesChart: makeChart(6),
     chewTrendChart: makeChart(2),
-    swallowTrendChart: makeChart(2),
-    currentPatientBaselines: { chew: 0.72, swallow: 1.25 }
+    currentPatientBaselines: { chew: 0.72 }
   };
   vm.runInNewContext(source, context);
   context.testUpdateCharts([
-    { start_time: '2026-11-05T10:00:00Z', avg_chew_duration: 0.65, avg_swallow_pause: 0.9,
-      alertBreakdownAvailable: true,
+    { start_time: '2026-11-05T10:00:00Z', avg_chew_duration: 0.65,
+          alertBreakdownAvailable: true,
       eventCounts: { cough: 1, l1: 2, l2: 0, l3: 0, l4: 1, visibility: 1 } },
-    { start_time: '2026-11-04T10:00:00Z', avg_chew_duration: 0.8, avg_swallow_pause: null,
-      alertBreakdownAvailable: false, eventCounts: null }
+    { start_time: '2026-11-04T10:00:00Z', avg_chew_duration: 0.8,
+          alertBreakdownAvailable: false, eventCounts: null }
   ]);
   assert.deepEqual(context.anomaliesChart.data.datasets.map(dataset => dataset.data[0]), [1, 2, 0, 0, 1, 1]);
   assert.equal(context.anomaliesChart.data.datasets[0].data[1], null);
   assert.equal(context.chewTrendChart.data.datasets[1].data[0], 0.72);
-  assert.equal(context.swallowTrendChart.data.datasets[0].data[0], 0.9);
-  assert.equal(context.swallowTrendChart.data.datasets[1].data[0], 1.25);
 });
 
 test('meal history renders separate alert counts, legacy warning and event details as text', () => {
@@ -247,10 +242,10 @@ test('meal history renders separate alert counts, legacy warning and event detai
   vm.runInNewContext(source, context);
   context.testRenderMealHistory([
     { id: 'old', event_schema_version: 1, start_time: '2026-11-04T10:00:00Z', diet_type: 'soft',
-      total_duration_sec: 600, total_chew_count: 15, avg_chew_duration: 0.8, avg_swallow_pause: null,
+      total_duration_sec: 600, total_chew_count: 15, total_swallow_count: null, avg_chew_duration: 0.8,
       risk_level: 'NORMAL', alertBreakdownAvailable: false, eventCounts: null, events: [] },
     { id: 'new', event_schema_version: 2, start_time: '2026-11-05T10:00:00Z', diet_type: 'soft',
-      total_duration_sec: 540, total_chew_count: 14.5, avg_chew_duration: 0.65, avg_swallow_pause: 0.9,
+      total_duration_sec: 540, total_chew_count: 14.5, total_swallow_count: 8, avg_chew_duration: 0.65,
       risk_level: 'HIGH_RISK', alertBreakdownAvailable: true,
       eventCounts: { cough: 1, l1: 0, l2: 0, l3: 0, l4: 1, visibility: 1 },
       events: [{ event_type: 'L3_VISIBILITY', triggered_at: '2026-11-05T10:01:00Z', details: '<img src=x onerror=alert(1)>' }] }
@@ -260,6 +255,7 @@ test('meal history renders separate alert counts, legacy warning and event detai
   assert.equal(container.children.length, 2);
   assert.match(rendered, /舊資料：警報分級無法拆分/);
   assert.match(rendered, /一般咳嗽 1/);
+  assert.match(rendered, /吞嚥 8 次/);
   assert.match(rendered, /L4 1/);
   assert.match(rendered, /畫面遮蔽 1/);
   assert.match(rendered, /<img src=x onerror=alert\(1\)>/);
@@ -352,21 +348,24 @@ test('history loader applies the selected 30-day start-time filter', async () =>
   assert.equal(calls[0].limit, 500);
 });
 
-test('patient session migration adds swallow-pause and event-schema version fields', () => {
+test('patient session migration adds swallow-count and event-schema version fields', () => {
   const migrationPath = path.join(root, 'supabase/migrations/20261106150000_caregiver_history_data.sql');
   assert.equal(fs.existsSync(migrationPath), true, 'caregiver history migration must exist');
   const migration = fs.readFileSync(migrationPath, 'utf8');
-  assert.match(migration, /add column if not exists avg_swallow_pause double precision/);
+  assert.match(migration, /add column if not exists total_swallow_count integer/);
   assert.match(migration, /add column if not exists event_schema_version smallint/);
   assert.match(migration, /default 1/);
+  assert.doesNotMatch(migration, /total_swallow_count integer not null default 0/i);
+  assert.doesNotMatch(migration, /avg_swallow_pause/);
 });
 
-test('caregiver history UI exposes the agreed range selector, per-meal list and swallow trend', () => {
+test('caregiver history UI exposes the agreed range selector, per-meal list and live swallow count', () => {
   assert.match(caregiverPage, /id="caregiver-history-range"/);
   assert.match(caregiverPage, /value="recent7"/);
   assert.match(caregiverPage, /value="30days"/);
   assert.match(caregiverPage, /id="meal-history-list"/);
-  assert.match(caregiverPage, /id="chart-swallow-trend"/);
+  assert.match(caregiverPage, /id="stat-swallows"/);
+  assert.doesNotMatch(caregiverPage, /id="chart-swallow-trend"/);
 });
 
 test('patient meal writes use a fresh session ID and never fall back to a previous meal', () => {
@@ -547,9 +546,8 @@ test('reset caregiver view clears the previous patient video, alerts, and histor
     },
     anomaliesChart: {},
     chewTrendChart: {},
-    swallowTrendChart: {},
     historyRequestGeneration: 0,
-    currentPatientBaselines: { chew: 0.85, swallow: 1.1 },
+    currentPatientBaselines: { chew: 0.85 },
     currentHistoryRange: 'recent7',
     setMealHistoryStatus() {},
     renderMealHistory() {},
@@ -703,24 +701,28 @@ test('caregiver profile loader populates a safe select and prefers requested the
   assert.equal(select.value, 'P002', 'existing selection is preferred when requested code is unavailable');
 });
 
-test('deprecated diet selector card and caregiver non-cough stat cards are removed cleanly', () => {
+test('patient diet selector stays removed while caregiver shows concise live metrics', () => {
   assert.doesNotMatch(patientPage, /請選擇本次用餐質地/);
   assert.doesNotMatch(patientPage, /id="btn-diet-(regular|soft|pureed)"/);
 
-  assert.doesNotMatch(caregiverPage, /id="stat-chews"/);
-  assert.doesNotMatch(caregiverPage, /id="stat-swallows"/);
+  assert.match(caregiverPage, /id="stat-chews"/);
+  assert.match(caregiverPage, /id="stat-swallows"/);
+  assert.match(caregiverPage, /id="stat-coughs"/);
   assert.doesNotMatch(caregiverPage, /id="stat-jaw-vel"/);
   assert.doesNotMatch(caregiverPage, /id="stat-pouching"/);
-  assert.match(caregiverPage, /id="stat-coughs"/);
 
   const startAt = caregiverJs.indexOf('function handleStateUpdate(state) {');
   const endAt = caregiverJs.indexOf('function showCaregiverAlert(', startAt);
   const source = caregiverJs.slice(startAt, endAt) + '\nglobalThis.testHandleStateUpdate = handleStateUpdate;';
+  const chewNode = { innerText: '0' };
+  const swallowNode = { innerText: '0' };
   const coughNode = { innerText: '0' };
   const dietNode = { innerText: '-' };
   const context = {
     document: {
       getElementById(id) {
+        if (id === 'stat-chews') return chewNode;
+        if (id === 'stat-swallows') return swallowNode;
         if (id === 'stat-coughs') return coughNode;
         if (id === 'caregiver-diet-type') return dietNode;
         return null;
@@ -748,6 +750,8 @@ test('deprecated diet selector card and caregiver non-cough stat cards are remov
     activeAlertLevel: null,
     sessionEnded: false
   });
+  assert.equal(chewNode.innerText, 25);
+  assert.equal(swallowNode.innerText, 3);
   assert.equal(coughNode.innerText, 6);
 });
 
@@ -802,4 +806,232 @@ test('L4 overlay circles share exact geometry with handNearChestOrThroat and low
     shakeDetected = context.fns.checkContinuousBodyShaking({ x: s.x, y: s.y }, 72, s.t, 640, 480);
   }
   assert.equal(shakeDetected, true, 'moderate distress shaking at 5-6 FPS must not be locked out');
+});
+
+
+test('patient endpoint removes hardcoded defaults, dashboard backdoor link, and unscoped upsert pollution', () => {
+  assert.doesNotMatch(patientPage, /王爺爺|陳奶奶|林伯伯/);
+  assert.doesNotMatch(patientPage, /anti_choke_patient_list/);
+  assert.doesNotMatch(patientPage, /caregiver\.html/);
+  assert.match(patientPage, /id="login-modal"[^>]*hidden/);
+  assert.match(patientPage, /id="standby-overlay"/);
+  assert.match(patientPage, /id="chk-kiosk-lock"/);
+
+  const loginStart = patientJs.indexOf('async function loginAsPatient(');
+  const loginEnd = patientJs.indexOf('// ====== 依「帳號＋單一個案」嚴格隔離之嗆咳紀錄管理', loginStart);
+  assert.ok(loginStart >= 0 && loginEnd > loginStart);
+  const loginBody = patientJs.slice(loginStart, loginEnd);
+  assert.doesNotMatch(loginBody, /\.upsert\(/, 'selecting a patient must never upsert stale localStorage profiles into another account');
+  assert.doesNotMatch(loginBody, /startMealSession\(/, 'selecting a patient must enter standby instead of starting camera immediately');
+
+  const authUiJs = read('mobile/auth-ui.js');
+  assert.match(authUiJs, /purgeLocalState\(\)/);
+  assert.match(authUiJs, /verifyCurrentPassword/);
+  assert.match(authUiJs, /isMealSessionActive/);
+  assert.match(authUiJs, /isPatientKioskLocked/);
+});
+
+test('authenticated flow enters standby for single home patient, isolates cough records, and enforces meal & kiosk locks', async () => {
+  const startAt = patientJs.indexOf('// 3. UI 互動、雲端個案管理、待機模式與嗆咳紀錄隔離');
+  const endAt = patientJs.indexOf('// 🎯 全域 Window 顯式綁定', startAt);
+  assert.ok(startAt >= 0 && endAt > startAt, 'patient privacy/standby section must exist');
+  const source = patientJs.slice(startAt, endAt) + `
+    globalThis.api = {
+      initializeAuthenticatedPatientFlow,
+      openLoginModal,
+      loginAsPatient,
+      recordCoughEvent,
+      getCoughRecords,
+      clearAllCoughRecords,
+      syncMealAndSwitchControls,
+      getState: () => ({ currentAuthUser, currentPatient, isMealActive, isKioskLocked, cloudPatientProfiles }),
+      setMealActive: (v) => { isMealActive = v; syncMealAndSwitchControls(); }
+    };
+  `;
+
+  const store = new Map();
+  const localStorageMock = {
+    get length() { return store.size; },
+    key(i) { return Array.from(store.keys())[i] || null; },
+    getItem(k) { return store.has(k) ? store.get(k) : null; },
+    setItem(k, v) { store.set(k, String(v)); },
+    removeItem(k) { store.delete(k); }
+  };
+
+  const makeClassList = (initial = []) => {
+    const set = new Set(initial);
+    return {
+      add(...cls) { cls.forEach(c => set.add(c)); },
+      remove(...cls) { cls.forEach(c => set.delete(c)); },
+      toggle(c, force) {
+        if (force === undefined) {
+          if (set.has(c)) { set.delete(c); return false; }
+          set.add(c); return true;
+        }
+        if (force) set.add(c); else set.delete(c);
+        return Boolean(force);
+      },
+      contains(c) { return set.has(c); }
+    };
+  };
+
+  const elements = new Map();
+  const getEl = (id) => {
+    if (!elements.has(id)) {
+      const initialHidden = (id === 'login-modal' || id === 'patient-add-view' || id === 'cough-record-modal' || id === 'btn-close-login-modal');
+      elements.set(id, {
+        id,
+        disabled: false,
+        checked: false,
+        value: '',
+        textContent: '',
+        innerText: '',
+        style: {},
+        children: [],
+        classList: makeClassList(initialHidden ? ['hidden'] : []),
+        replaceChildren(...kids) { this.children = kids; },
+        appendChild(child) { this.children.push(child); },
+        append(...kids) { this.children.push(...kids); }
+      });
+    }
+    return elements.get(id);
+  };
+
+  let cloudRows = [
+    { id: 'uuid-p1', patient_code: 'P001', full_name: '張爺爺 (男)', gender: '男', diet_type: 'soft', baseline_chew_duration: 0.85, baseline_swallow_pause: 1.1 }
+  ];
+  let passwordVerifyResult = false;
+  let verifyCalls = 0;
+  const alerts = [];
+  let startMealCalled = 0;
+
+  const context = {
+    supabaseClient: {
+      from(table) {
+        assert.equal(table, 'patient_profiles');
+        return {
+          select() {
+            return {
+              order: async () => ({ data: cloudRows.slice(), error: null }),
+              eq(_col, val) {
+                return {
+                  maybeSingle: async () => ({ data: cloudRows.find(r => r.patient_code === val) || null, error: null })
+                };
+              }
+            };
+          }
+        };
+      }
+    },
+    currentAuthUser: null,
+    cloudPatientProfiles: [],
+    isKioskLocked: false,
+    currentPatient: { id: null, patient_code: '', full_name: '', diet_type: 'soft', baseline_chew: 0.85, baseline_swallow: 1.1 },
+    currentDiet: 'soft',
+    isMealActive: false,
+    mealMetrics: {},
+    activeAlertLevel: null,
+    activeAlertMessage: null,
+    activeAlertBaseMessage: null,
+    aiCtx: { clearRect() {} },
+    aiCanvas: { width: 640, height: 480 },
+    CONFIG: { DIET_PROFILES: { soft: { name: '軟食' }, regular: { name: '普通餐' } } },
+    dismissAlertOverlay() {},
+    updateRiskBadge() {},
+    startMealSession: async () => { startMealCalled += 1; },
+    localStorage: localStorageMock,
+    confirm: () => true,
+    alert: (m) => alerts.push(m),
+    document: {
+      getElementById: getEl,
+      querySelectorAll: () => [],
+      querySelector: () => ({ value: '男' }),
+      createElement: (tag) => ({
+        tag,
+        type: '',
+        className: '',
+        textContent: '',
+        style: {},
+        attrs: {},
+        children: [],
+        setAttribute(k, v) { this.attrs[k] = v; },
+        append(...kids) { this.children.push(...kids); },
+        appendChild(c) { this.children.push(c); }
+      })
+    },
+    window: {
+      ConnectionCore,
+      AuthUI: {
+        verifyCurrentPassword: async () => {
+          verifyCalls += 1;
+          return passwordVerifyResult;
+        }
+      }
+    },
+    console,
+    Date,
+    String,
+    Boolean,
+    Array,
+    JSON
+  };
+
+  vm.runInNewContext(source, context);
+
+  // 1. Single-profile home account auto-enters standby without starting camera or opening modal
+  await context.api.initializeAuthenticatedPatientFlow({ id: 'owner-A', email: 'a@example.com' });
+  assert.equal(context.api.getState().currentPatient.patient_code, 'P001');
+  assert.equal(startMealCalled, 0, 'must wait in standby until user clicks Start Meal');
+  assert.equal(getEl('login-modal').classList.contains('hidden'), true);
+  assert.equal(getEl('standby-overlay').classList.contains('hidden'), false);
+  assert.equal(getEl('btn-start-meal').disabled, false);
+
+  // 2. Cough records strictly isolated per (ownerId, patientCode)
+  cloudRows.push({ id: 'uuid-p2', patient_code: 'P002', full_name: '李奶奶 (女)', gender: '女', diet_type: 'soft' });
+  context.api.recordCoughEvent('AI 聽覺辨識 (咳嗽聲)', '細節 P001');
+  assert.equal(context.api.getCoughRecords().length, 1);
+  assert.equal(getEl('header-cough-badge').textContent, '1');
+
+  await context.api.loginAsPatient('P002', '李奶奶 (女)');
+  assert.equal(context.api.getState().currentPatient.patient_code, 'P002');
+  assert.equal(context.api.getCoughRecords().length, 0, 'P002 must not see P001 cough records');
+  assert.equal(getEl('header-cough-badge').textContent, '0');
+
+  context.api.recordCoughEvent('影像頭部急抽動', '細節 P002');
+  assert.equal(context.api.getCoughRecords().length, 1);
+  context.api.clearAllCoughRecords();
+  assert.equal(context.api.getCoughRecords().length, 0);
+
+  await context.api.loginAsPatient('P001', '張爺爺 (男)');
+  assert.equal(context.api.getCoughRecords().length, 1, 'clearing P002 cough records must preserve P001 records');
+
+  // Cross-account check: Owner B with same patient_code P001 sees zero of Owner A's records
+  await context.api.initializeAuthenticatedPatientFlow({ id: 'owner-B', email: 'b@example.com' });
+  await context.api.loginAsPatient('P001', '張爺爺 (男)');
+  assert.equal(context.api.getCoughRecords().length, 0, 'Owner B must never see Owner A cough records');
+
+  // 3. Active meal locks patient switching completely
+  context.api.setMealActive(true);
+  assert.equal(getEl('btn-login-modal').disabled, true);
+  assert.match(getEl('btn-login-modal').textContent, /用餐中鎖定/);
+  await context.api.loginAsPatient('P002', '李奶奶 (女)');
+  assert.equal(context.api.getState().currentPatient.patient_code, 'P001', 'cannot switch patient mid-meal');
+  context.api.setMealActive(false);
+
+  // 4. Institution Kiosk Lock blocks opening patient list until caregiver password verifies
+  getEl('chk-kiosk-lock').checked = true;
+  await context.api.loginAsPatient('P002', '李奶奶 (女)');
+  assert.equal(context.api.getState().isKioskLocked, true);
+  assert.equal(getEl('patient-list-container').children.length, 0, 'other patients removed from DOM when locked');
+
+  passwordVerifyResult = false;
+  await context.api.openLoginModal();
+  assert.equal(verifyCalls, 1);
+  assert.equal(getEl('login-modal').classList.contains('hidden'), true, 'wrong/cancelled password keeps modal locked');
+
+  passwordVerifyResult = true;
+  await context.api.openLoginModal();
+  assert.equal(verifyCalls, 2);
+  assert.equal(context.api.getState().isKioskLocked, false);
+  assert.equal(getEl('login-modal').classList.contains('hidden'), false, 'valid caregiver password unlocks patient selector');
 });

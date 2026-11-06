@@ -198,15 +198,6 @@ test('latest session history keeps the newest seven in chronological chart order
   assert.deepEqual(sessions.map(session => session.id), [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]);
 });
 
-test('swallow-pause tracker records per-meal durations and resets cleanly', () => {
-  const tracker = ConnectionCore.createSwallowPauseTracker();
-  tracker.record(0.6);
-  tracker.record(1.0);
-  assert.deepEqual(tracker.snapshot(), { count: 2, average: 0.8 });
-  tracker.reset();
-  assert.deepEqual(tracker.snapshot(), { count: 0, average: null });
-});
-
 test('meal event summary keeps cough, L1-L4 and visibility categories separate and marks legacy data', () => {
   const sessions = [
     { id: 'new-session', event_schema_version: 2 },
@@ -293,4 +284,63 @@ test('multi-path L4 evaluator distinguishes struggle (3.0s), two-hand sign (2.5s
   const res = acc.update(pathC, 7.5);
   assert.equal(res.triggered, true);
   assert.equal(res.path, 'post_cough_clutch');
+});
+
+
+test('privacy storage keys isolate cough records and kiosk locks by account and patient code', () => {
+  assert.equal(
+    ConnectionCore.coughStorageKey('user-uuid-1', 'P001'),
+    'anti_choke_cough_records:user-uuid-1:P001'
+  );
+  assert.equal(
+    ConnectionCore.coughStorageKey('user-uuid-1', 'P002'),
+    'anti_choke_cough_records:user-uuid-1:P002'
+  );
+  assert.notEqual(
+    ConnectionCore.coughStorageKey('user-uuid-1', 'P001'),
+    ConnectionCore.coughStorageKey('user-uuid-2', 'P001')
+  );
+  assert.equal(ConnectionCore.coughStorageKey('', 'P001'), null);
+  assert.equal(ConnectionCore.coughStorageKey('user-uuid-1', ''), null);
+  assert.equal(ConnectionCore.coughStorageKey('user-uuid-1', '../bad'), null);
+
+  assert.equal(ConnectionCore.kioskLockStorageKey('user-uuid-1'), 'anti_choke_kiosk_lock:user-uuid-1');
+  assert.equal(ConnectionCore.kioskLockStorageKey(''), null);
+});
+
+test('nextPatientCode avoids collisions when earlier patient codes were removed', () => {
+  assert.equal(ConnectionCore.nextPatientCode([]), 'P001');
+  assert.equal(ConnectionCore.nextPatientCode([{ patient_code: 'P001' }]), 'P002');
+  assert.equal(
+    ConnectionCore.nextPatientCode([{ patient_code: 'P002' }, { patient_code: 'P004' }]),
+    'P005'
+  );
+});
+
+test('legacy unscoped keys and logout cleanup remove patient PII without touching unrelated keys', () => {
+  const map = new Map([
+    ['anti_choke_patient_list', '[{"code":"P001"}]'],
+    ['anti_choke_cough_records', '[{"patientCode":"P001"}]'],
+    ['anti_choke_cough_records:user-1:P001', '[{"patientCode":"P001"}]'],
+    ['anti_choke_kiosk_lock:user-1', 'P001'],
+    ['unrelated_app_setting', 'keep-me']
+  ]);
+  const storage = {
+    get length() { return map.size; },
+    key(i) { return Array.from(map.keys())[i] || null; },
+    getItem(k) { return map.has(k) ? map.get(k) : null; },
+    setItem(k, v) { map.set(k, String(v)); },
+    removeItem(k) { map.delete(k); }
+  };
+
+  ConnectionCore.purgeLegacySharedPatientKeys(storage);
+  assert.equal(map.has('anti_choke_patient_list'), false);
+  assert.equal(map.has('anti_choke_cough_records'), false);
+  assert.equal(map.has('anti_choke_cough_records:user-1:P001'), true);
+  assert.equal(map.get('unrelated_app_setting'), 'keep-me');
+
+  ConnectionCore.purgeAllLocalPatientKeys(storage);
+  assert.equal(map.has('anti_choke_cough_records:user-1:P001'), false);
+  assert.equal(map.has('anti_choke_kiosk_lock:user-1'), false);
+  assert.equal(map.get('unrelated_app_setting'), 'keep-me');
 });

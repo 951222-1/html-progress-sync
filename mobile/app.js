@@ -65,11 +65,18 @@ class EvidenceFusion {
 
 // 1. 全域變數與狀態
 let supabaseClient = null;
-let currentPatient = { id: null, patient_code: 'P001', full_name: '王爺爺', diet_type: 'soft', baseline_chew: 0.85, baseline_swallow: 1.10 };
+let currentAuthUser = null;
+let cloudPatientProfiles = [];
+let isKioskLocked = false;
+let currentPatient = { id: null, patient_code: '', full_name: '', diet_type: 'soft', baseline_chew: 0.85, baseline_swallow: 1.10 };
 let currentDiet = 'soft'; // regular, soft, pureed
 let isMealActive = false;
+
+if (window.ConnectionCore && typeof window.ConnectionCore.purgeLegacySharedPatientKeys === 'function') {
+    window.ConnectionCore.purgeLegacySharedPatientKeys(window.localStorage);
+    window.ConnectionCore.purgeLegacySharedPatientKeys(window.sessionStorage);
+}
 const mealSessionTracker = window.ConnectionCore.createMealSessionTracker();
-const swallowPauseTracker = window.ConnectionCore.createSwallowPauseTracker();
 const mealStartLock = window.ConnectionCore.createStartLock();
 let currentMealSessionInsertPromise = Promise.resolve(null);
 
@@ -188,6 +195,7 @@ let mealMetrics = {
     jawVelocity: 0.0,
     jawStillTime: 0.0,
     currentBiteChews: 0,
+    swallowCount: 0,
     coughCountL1: 0,
     coughCountL2: 0,
     chokingEventsL3: 0,
@@ -224,6 +232,7 @@ const remoteCandidateBuffer = window.ConnectionCore.createCandidateBuffer();
 async function startApp() {
     initSupabase();
     setupCanvasAndVideo();
+    syncMealAndSwitchControls();
     initMediaPipe();
     initAudioClassifier();
     if (!supabaseClient) {
@@ -231,11 +240,9 @@ async function startApp() {
         return;
     }
     try {
-        await window.AuthUI.requireAuth(supabaseClient, '使用者端');
-        openLoginModal();
-        if (window._selectedPatient) {
-            await loginAsPatient(window._selectedPatient.code, window._selectedPatient.nameStr);
-        }
+        const user = await window.AuthUI.requireAuth(supabaseClient, '使用者端');
+        currentAuthUser = user;
+        await initializeAuthenticatedPatientFlow(user);
     } catch (error) {
         console.error('[Supabase Auth] User endpoint startup failed:', error);
         window.AuthUI.showSetupError('登入服務暫時無法使用，請重新整理頁面後再試。');
@@ -262,7 +269,7 @@ function initSupabase() {
     }
 }
 
-// 3. UI 互動與質地切換
+// 3. UI 互動、雲端個案管理、待機模式與嗆咳紀錄隔離
 function selectDiet(dietKey) {
     currentDiet = dietKey;
     document.querySelectorAll('.diet-btn').forEach(btn => btn.classList.remove('active', 'bg-blue-600', 'text-white'));
@@ -275,7 +282,215 @@ function selectDiet(dietKey) {
     if (hudDiet) hudDiet.innerText = dietInfo ? dietInfo.name : dietKey;
 }
 
-function openLoginModal() {
+function clearCanvasFrame() {
+    if (aiCtx && aiCanvas) {
+        aiCtx.clearRect(0, 0, aiCanvas.width, aiCanvas.height);
+    }
+}
+
+function setStandbyOverlayVisible(visible, titleText, descText, iconText) {
+    const overlay = document.getElementById('standby-overlay');
+    if (!overlay) return;
+    if (visible) {
+        overlay.classList.remove('hidden');
+        const titleEl = document.getElementById('standby-title');
+        const descEl = document.getElementById('standby-desc');
+        const iconEl = document.getElementById('standby-icon');
+        if (titleText && titleEl) titleEl.textContent = titleText;
+        if (descText && descEl) descEl.textContent = descText;
+        if (iconText && iconEl) iconEl.textContent = iconText;
+    } else {
+        overlay.classList.add('hidden');
+    }
+}
+
+function syncMealAndSwitchControls() {
+    const hasPatient = Boolean(currentPatient && currentPatient.id);
+    const btnStart = document.getElementById('btn-start-meal');
+    const btnEnd = document.getElementById('btn-end-meal');
+    const btnSwitch = document.getElementById('btn-login-modal');
+    const btnCough = document.getElementById('btn-cough-records');
+    const btnFooterCough = document.getElementById('btn-footer-cough-records');
+    const btnCloseModal = document.getElementById('btn-close-login-modal');
+
+    if (btnStart) {
+        const canStart = hasPatient && !isMealActive;
+        btnStart.disabled = !canStart;
+        btnStart.classList.toggle('opacity-50', !canStart);
+        btnStart.classList.toggle('cursor-not-allowed', !canStart);
+    }
+    if (btnEnd) {
+        btnEnd.disabled = !isMealActive;
+        if (isMealActive) {
+            btnEnd.classList.remove('opacity-50', 'cursor-not-allowed', 'bg-slate-800', 'text-slate-500');
+            btnEnd.classList.add('bg-rose-600', 'text-white', 'hover:bg-rose-500');
+        } else {
+            btnEnd.classList.remove('bg-rose-600', 'text-white', 'hover:bg-rose-500');
+            btnEnd.classList.add('bg-slate-800', 'text-slate-500', 'cursor-not-allowed');
+        }
+    }
+    if (btnSwitch) {
+        btnSwitch.disabled = !currentAuthUser || isMealActive;
+        if (isMealActive) {
+            btnSwitch.textContent = '🍽️ 用餐中鎖定';
+            btnSwitch.title = '用餐監測進行中，請先點擊結束用餐再切換個案';
+        } else if (isKioskLocked) {
+            btnSwitch.textContent = '🔒 個案已鎖定';
+            btnSwitch.title = '此裝置已鎖定於當前個案，點擊後須驗證照護密碼才可切換';
+        } else {
+            btnSwitch.textContent = '🔑 身分切換';
+            btnSwitch.title = '切換或新增被照護者';
+        }
+    }
+    if (btnCough) btnCough.disabled = !hasPatient;
+    if (btnFooterCough) btnFooterCough.disabled = !hasPatient;
+    if (btnCloseModal) btnCloseModal.classList.toggle('hidden', !hasPatient);
+}
+
+function getSavedKioskLockCode(ownerId) {
+    const key = window.ConnectionCore && window.ConnectionCore.kioskLockStorageKey(ownerId);
+    if (!key) return '';
+    try {
+        const raw = localStorage.getItem(key);
+        return raw ? String(raw).trim() : '';
+    } catch (_) {
+        return '';
+    }
+}
+
+function setKioskLock(locked, patientCode = '') {
+    const ownerId = currentAuthUser && currentAuthUser.id;
+    const key = window.ConnectionCore && window.ConnectionCore.kioskLockStorageKey(ownerId);
+    if (locked && key && patientCode) {
+        isKioskLocked = true;
+        try { localStorage.setItem(key, patientCode); } catch (_) {}
+        const container = document.getElementById('patient-list-container');
+        if (container) container.replaceChildren();
+    } else {
+        isKioskLocked = false;
+        if (key) {
+            try { localStorage.removeItem(key); } catch (_) {}
+        }
+    }
+    const chk = document.getElementById('chk-kiosk-lock');
+    if (chk) chk.checked = isKioskLocked;
+    syncMealAndSwitchControls();
+}
+
+async function loadCloudPatientProfiles() {
+    if (!supabaseClient || !currentAuthUser) {
+        cloudPatientProfiles = [];
+        return [];
+    }
+    const { data, error } = await supabaseClient
+        .from('patient_profiles')
+        .select('id, patient_code, full_name, gender, diet_type, baseline_chew_duration, baseline_swallow_pause')
+        .order('created_at', { ascending: true });
+    if (error) throw error;
+    cloudPatientProfiles = Array.isArray(data)
+        ? data.filter(p => p && /^[A-Za-z0-9_-]{1,32}$/.test(String(p.patient_code || '')))
+        : [];
+    return cloudPatientProfiles;
+}
+
+function renderPatientList() {
+    const container = document.getElementById('patient-list-container');
+    const statusEl = document.getElementById('patient-list-status');
+    if (!container) return;
+    container.replaceChildren();
+
+    if (!currentAuthUser || isKioskLocked) {
+        return;
+    }
+
+    if (statusEl) {
+        statusEl.textContent = cloudPatientProfiles.length > 0
+            ? `已同步此帳號名下 ${cloudPatientProfiles.length} 位個案（選擇後先進入待機）`
+            : '此帳號尚無個案，請先新增第一位被照護者';
+    }
+
+    for (const profile of cloudPatientProfiles) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'patient-select-btn w-full bg-slate-800 hover:bg-slate-700 text-slate-200 p-3 rounded-2xl font-semibold text-left flex items-center justify-between border border-slate-700 transition';
+        btn.setAttribute('data-patient-code', profile.patient_code);
+        btn.setAttribute('data-patient-name', profile.full_name || profile.patient_code);
+
+        const leftSpan = document.createElement('span');
+        leftSpan.style.pointerEvents = 'none';
+        const icon = profile.gender === '女' ? '👵' : '👴';
+        leftSpan.textContent = `${icon} ${profile.full_name || profile.patient_code} (${profile.patient_code})`;
+
+        const rightSpan = document.createElement('span');
+        rightSpan.style.pointerEvents = 'none';
+        rightSpan.className = 'text-xs text-blue-400';
+        rightSpan.textContent = (currentPatient && currentPatient.patient_code === profile.patient_code)
+            ? '目前待機中'
+            : '點擊待機';
+
+        btn.append(leftSpan, rightSpan);
+        container.appendChild(btn);
+    }
+}
+
+function showAddPatientView() {
+    const selectView = document.getElementById('patient-select-view');
+    const addView = document.getElementById('patient-add-view');
+    const backBtn = document.getElementById('btn-back-patient-list');
+    if (selectView) selectView.classList.add('hidden');
+    if (addView) addView.classList.remove('hidden');
+    if (backBtn) backBtn.classList.toggle('hidden', cloudPatientProfiles.length === 0);
+    const input = document.getElementById('new-patient-name');
+    if (input) {
+        input.value = '';
+        input.focus();
+    }
+}
+
+function showPatientListView() {
+    if (cloudPatientProfiles.length === 0) {
+        showAddPatientView();
+        return;
+    }
+    const selectView = document.getElementById('patient-select-view');
+    const addView = document.getElementById('patient-add-view');
+    if (addView) addView.classList.add('hidden');
+    if (selectView) selectView.classList.remove('hidden');
+    renderPatientList();
+}
+
+function hideLoginModalElement() {
+    const modal = document.getElementById('login-modal');
+    if (modal) {
+        modal.style.display = 'none';
+        modal.classList.add('hidden');
+    }
+}
+
+async function openLoginModal() {
+    if (isMealActive) {
+        alert('目前正在進行用餐監測，請先點擊「結束用餐」儲存紀錄後再切換個案。');
+        return;
+    }
+    if (!currentAuthUser || !supabaseClient) return;
+
+    if (isKioskLocked && window.AuthUI && typeof window.AuthUI.verifyCurrentPassword === 'function') {
+        const verified = await window.AuthUI.verifyCurrentPassword(
+            supabaseClient,
+            `此平板已鎖定於「${currentPatient.full_name || currentPatient.patient_code}」。請輸入照護帳號密碼以解鎖切換個案。`
+        );
+        if (!verified) return;
+        setKioskLock(false);
+    }
+
+    try {
+        await loadCloudPatientProfiles();
+    } catch (err) {
+        console.error('[Patient List] Cloud sync failed:', err);
+    }
+
+    syncMealAndSwitchControls();
+    showPatientListView();
     const modal = document.getElementById('login-modal');
     if (modal) {
         modal.style.display = 'flex';
@@ -284,66 +499,363 @@ function openLoginModal() {
 }
 
 function closeLoginModal() {
+    if (!currentPatient || !currentPatient.id) return;
+    hideLoginModalElement();
+}
+
+function applySelectedPatientProfile(profile, options = {}) {
+    if (isMealActive) {
+        alert('目前正在進行用餐監測，請先點擊「結束用餐」儲存紀錄後再切換個案。');
+        return false;
+    }
+    if (!profile || !profile.id) return false;
+
+    currentPatient = {
+        id: profile.id,
+        patient_code: profile.patient_code,
+        full_name: profile.full_name || profile.patient_code,
+        diet_type: profile.diet_type || 'soft',
+        baseline_chew: profile.baseline_chew_duration || 0.85,
+        baseline_swallow: profile.baseline_swallow_pause || 1.10
+    };
+    window.currentPatient = currentPatient;
+    currentDiet = currentPatient.diet_type;
+    selectDiet(currentDiet);
+
+    mealMetrics = {
+        startTime: null,
+        totalChews: 0,
+        chewStartTime: null,
+        chewDurations: [],
+        lastJawY: null,
+        jawVelocity: 0.0,
+        jawStillTime: 0.0,
+        currentBiteChews: 0,
+        swallowCount: 0,
+        coughCount: 0,
+        coughCountL1: 0,
+        coughCountL2: 0,
+        chokingEventsL3: 0,
+        pouchingEvents: 0,
+        riskLevel: 'NORMAL'
+    };
+    window.mealMetrics = mealMetrics;
+    activeAlertLevel = null;
+    activeAlertMessage = null;
+    activeAlertBaseMessage = null;
+    dismissAlertOverlay();
+    updateRiskBadge();
+    clearCanvasFrame();
+    closeCoughRecordModal();
+
+    const shouldLock = typeof options.lockKiosk === 'boolean'
+        ? options.lockKiosk
+        : Boolean(document.getElementById('chk-kiosk-lock')?.checked);
+    setKioskLock(shouldLock, currentPatient.patient_code);
+
+    const label = document.getElementById('current-patient-label');
+    if (label) label.textContent = `${currentPatient.full_name} (${currentPatient.patient_code})`;
+
+    const statusText = document.getElementById('meal-status-text');
+    if (statusText) statusText.textContent = '待機中（請按開始用餐）';
+
+    setStandbyOverlayVisible(
+        true,
+        `已就緒：${currentPatient.full_name} (${currentPatient.patient_code})`,
+        '目前為待機狀態（鏡頭與麥克風尚未開啟），請點擊下方「🍽️ 開始用餐」啟動即時守護。',
+        shouldLock ? '🔒' : '🛡️'
+    );
+
+    updateCoughBadge();
+    syncMealAndSwitchControls();
+    hideLoginModalElement();
+    console.log(`[Standby] Ready for patient: ${currentPatient.full_name} (${currentPatient.patient_code}), locked=${shouldLock}`);
+    return true;
+}
+
+async function initializeAuthenticatedPatientFlow(user) {
+    currentAuthUser = user;
+    const profiles = await loadCloudPatientProfiles();
+    const lockedCode = getSavedKioskLockCode(user.id);
+
+    if (lockedCode) {
+        const lockedProfile = profiles.find(p => p.patient_code === lockedCode);
+        if (lockedProfile) {
+            applySelectedPatientProfile(lockedProfile, { lockKiosk: true });
+            return;
+        }
+        setKioskLock(false);
+    }
+
+    if (profiles.length === 1) {
+        // 居家單一個案情境：登入後自動帶入待機狀態，省去重選步驟
+        applySelectedPatientProfile(profiles[0], { lockKiosk: false });
+        return;
+    }
+
+    syncMealAndSwitchControls();
+    showPatientListView();
     const modal = document.getElementById('login-modal');
+    if (modal) {
+        modal.style.display = 'flex';
+        modal.classList.remove('hidden');
+    }
+}
+
+async function saveAndLoginNewPatient() {
+    if (isMealActive) {
+        alert('目前正在進行用餐監測，請先點擊「結束用餐」後再新增個案。');
+        return;
+    }
+    if (!supabaseClient || !currentAuthUser) {
+        alert('請先登入照護帳號。');
+        return;
+    }
+    const nameInput = document.getElementById('new-patient-name');
+    const rawName = nameInput ? nameInput.value.trim() : '';
+    if (!rawName) {
+        alert('請輸入個案姓名或稱呼！');
+        return;
+    }
+    const genderEl = document.querySelector('input[name="new-patient-gender"]:checked');
+    const gender = (genderEl && genderEl.value === '女') ? '女' : '男';
+    const saveBtn = document.getElementById('btn-save-new-patient');
+    if (saveBtn) saveBtn.disabled = true;
+
+    try {
+        await loadCloudPatientProfiles();
+        const code = window.ConnectionCore.nextPatientCode(cloudPatientProfiles);
+        const fullName = `${rawName} (${gender})`;
+        const { data: profile, error } = await supabaseClient
+            .from('patient_profiles')
+            .insert({
+                owner_id: currentAuthUser.id,
+                patient_code: code,
+                full_name: fullName,
+                gender: gender,
+                diet_type: 'soft'
+            })
+            .select('*')
+            .single();
+        if (error) throw error;
+
+        cloudPatientProfiles.push(profile);
+        const lockChecked = Boolean(document.getElementById('chk-kiosk-lock')?.checked);
+        applySelectedPatientProfile(profile, { lockKiosk: lockChecked });
+    } catch (err) {
+        console.error('[Patient Create] Failed to create cloud patient profile:', err);
+        alert('無法儲存新個案至雲端，請檢查網路連線後重試。');
+    } finally {
+        if (saveBtn) saveBtn.disabled = false;
+    }
+}
+
+async function loginAsPatient(code, _nameStr) {
+    if (isMealActive) {
+        alert('目前正在進行用餐監測，請先點擊「結束用餐」儲存紀錄後再切換個案。');
+        return;
+    }
+    try {
+        if (!supabaseClient) throw new Error('Supabase client is unavailable.');
+        if (!currentAuthUser) {
+            const { data: authData, error: authError } = await supabaseClient.auth.getUser();
+            if (authError || !authData.user) throw new Error('請先登入同一個照護帳號。');
+            currentAuthUser = authData.user;
+        }
+
+        const normalizedCode = String(code || '').trim();
+        let profile = cloudPatientProfiles.find(p => p.patient_code === normalizedCode) || null;
+        if (!profile) {
+            const { data, error } = await supabaseClient
+                .from('patient_profiles')
+                .select('*')
+                .eq('patient_code', normalizedCode)
+                .maybeSingle();
+            if (error) throw error;
+            profile = data;
+        }
+        if (!profile) {
+            throw new Error('找不到此帳號名下的對應個案。');
+        }
+
+        const lockChecked = Boolean(document.getElementById('chk-kiosk-lock')?.checked);
+        applySelectedPatientProfile(profile, { lockKiosk: lockChecked });
+    } catch (error) {
+        console.error('[Patient login] Could not select cloud patient profile:', error);
+        alert('無法載入此個案資料，請重新選擇或新增個案。');
+        await openLoginModal();
+    }
+}
+
+// ====== 依「帳號＋單一個案」嚴格隔離之嗆咳紀錄管理 ======
+function getActiveCoughStorageKey() {
+    if (!window.ConnectionCore || typeof window.ConnectionCore.coughStorageKey !== 'function') return null;
+    const ownerId = currentAuthUser && currentAuthUser.id;
+    const patientCode = currentPatient && currentPatient.id ? currentPatient.patient_code : '';
+    return window.ConnectionCore.coughStorageKey(ownerId, patientCode);
+}
+
+function getCoughRecords() {
+    const key = getActiveCoughStorageKey();
+    if (!key) return [];
+    try {
+        const raw = localStorage.getItem(key);
+        if (!raw) return [];
+        const parsed = JSON.parse(raw);
+        if (!Array.isArray(parsed)) return [];
+        return parsed.filter(item => item && item.patientCode === currentPatient.patient_code);
+    } catch (_) {
+        return [];
+    }
+}
+
+function recordCoughEvent(typeStr, detailStr) {
+    const key = getActiveCoughStorageKey();
+    if (!key) return;
+    const now = new Date();
+    const timeStr = now.toLocaleTimeString('zh-TW', { hour12: false });
+    const dateStr = `${now.getMonth() + 1}/${now.getDate()}`;
+    const item = {
+        id: Date.now(),
+        ownerId: currentAuthUser.id,
+        patientCode: currentPatient.patient_code,
+        patientName: currentPatient.full_name,
+        time: `${dateStr} ${timeStr}`,
+        type: typeStr || '咳嗽偵測',
+        detail: detailStr || '背景靜默紀錄，無警報干擾'
+    };
+    const logs = getCoughRecords();
+    logs.unshift(item);
+    if (logs.length > 100) logs.length = 100;
+    try {
+        localStorage.setItem(key, JSON.stringify(logs));
+    } catch (_) {}
+    updateCoughBadge();
+}
+
+function updateCoughBadge() {
+    const logs = getCoughRecords();
+    const badge = document.getElementById('header-cough-badge');
+    if (badge) badge.textContent = String(logs.length);
+    const foot = document.getElementById('footer-cough-count');
+    if (foot) foot.textContent = String(logs.length);
+}
+
+function renderCoughRecords() {
+    const logs = getCoughRecords();
+    const listEl = document.getElementById('cough-record-list');
+    const mealCntEl = document.getElementById('cough-modal-meal-count');
+    const totalCntEl = document.getElementById('cough-modal-total-count');
+    const patientInfoEl = document.getElementById('cough-modal-patient-info');
+
+    if (patientInfoEl) {
+        patientInfoEl.textContent = (currentPatient && currentPatient.id)
+            ? `個案：${currentPatient.full_name} (${currentPatient.patient_code})`
+            : '個案：尚未選擇';
+    }
+    if (mealCntEl) {
+        mealCntEl.textContent = String((mealMetrics && mealMetrics.coughCount) ? mealMetrics.coughCount : 0);
+    }
+    if (totalCntEl) {
+        totalCntEl.textContent = String(logs.length);
+    }
+
+    if (!listEl) return;
+    listEl.replaceChildren();
+
+    if (logs.length === 0) {
+        const empty = document.createElement('div');
+        empty.className = 'text-center py-8 text-slate-500 text-xs';
+        empty.textContent = '🍵 目前此個案尚無任何嗆咳事件紀錄，進食狀況良好';
+        listEl.appendChild(empty);
+        return;
+    }
+
+    for (const item of logs) {
+        const row = document.createElement('div');
+        row.className = 'bg-slate-800/70 border border-slate-700/60 p-2.5 rounded-2xl flex items-center justify-between text-xs';
+
+        const left = document.createElement('div');
+        const headerRow = document.createElement('div');
+        headerRow.className = 'flex items-center space-x-2';
+
+        const typeSpan = document.createElement('span');
+        typeSpan.className = 'font-bold text-rose-400';
+        typeSpan.textContent = `⚠️ ${item.type || '咳嗽偵測'}`;
+
+        const timeSpan = document.createElement('span');
+        timeSpan.className = 'text-[10px] text-slate-400 font-mono';
+        timeSpan.textContent = item.time || '';
+
+        headerRow.append(typeSpan, timeSpan);
+
+        const detailDiv = document.createElement('div');
+        detailDiv.className = 'text-[11px] text-slate-400 mt-0.5';
+        detailDiv.textContent = item.detail || '';
+
+        left.append(headerRow, detailDiv);
+
+        const savedBadge = document.createElement('span');
+        savedBadge.className = 'text-[10px] bg-emerald-950/60 text-emerald-400 px-2 py-0.5 rounded-lg border border-emerald-800/40 shrink-0';
+        savedBadge.textContent = '已隔離存檔';
+
+        row.append(left, savedBadge);
+        listEl.appendChild(row);
+    }
+}
+
+function openCoughRecordModal() {
+    if (!currentPatient || !currentPatient.id) return;
+    renderCoughRecords();
+    const modal = document.getElementById('cough-record-modal');
+    if (modal) {
+        modal.style.display = 'flex';
+        modal.classList.remove('hidden');
+    }
+}
+
+function closeCoughRecordModal() {
+    const modal = document.getElementById('cough-record-modal');
     if (modal) {
         modal.style.display = 'none';
         modal.classList.add('hidden');
     }
 }
 
-async function loginAsPatient(code, nameStr) {
-    try {
-        if (!supabaseClient) throw new Error('Supabase client is unavailable.');
-        const { data: authData, error: authError } = await supabaseClient.auth.getUser();
-        if (authError || !authData.user) throw new Error('請先登入同一個照護帳號。');
-
-        const patientList = typeof window.getPatientList === 'function' ? window.getPatientList() : [];
-        const localPatient = patientList.find(patient => patient.code === code) || {};
-        const { data: profile, error: profileError } = await supabaseClient
-            .from('patient_profiles')
-            .upsert({
-                owner_id: authData.user.id,
-                patient_code: code,
-                full_name: nameStr || code,
-                gender: localPatient.gender || null,
-                diet_type: localPatient.diet || currentDiet || 'regular'
-            }, { onConflict: 'owner_id,patient_code' })
-            .select('*')
-            .single();
-        if (profileError) throw profileError;
-
-        currentPatient.id = profile.id;
-        currentPatient.patient_code = profile.patient_code;
-        currentPatient.full_name = profile.full_name;
-        currentPatient.diet_type = profile.diet_type || 'soft';
-        currentPatient.baseline_chew = profile.baseline_chew_duration || 0.85;
-        currentPatient.baseline_swallow = profile.baseline_swallow_pause || 1.10;
-        currentDiet = currentPatient.diet_type;
-        selectDiet(currentDiet);
-
-        console.log(`[Login] Selected patient: ${currentPatient.full_name} (${currentPatient.patient_code})`);
-        const label = document.getElementById('current-patient-label');
-        if (label) label.innerText = `${currentPatient.full_name} (${currentPatient.patient_code})`;
-        closeLoginModal();
-        await startMealSession();
-    } catch (error) {
-        console.error('[Patient login] Could not prepare the shared patient profile:', error);
-        openLoginModal();
-        alert('無法連結此個案資料。請確認兩端使用同一個帳號，並稍後重試。');
+function clearAllCoughRecords() {
+    const key = getActiveCoughStorageKey();
+    if (!key) return;
+    const label = `${currentPatient.full_name} (${currentPatient.patient_code})`;
+    if (confirm(`確定要清除「${label}」在本機的嗆咳紀錄嗎？（不會影響其他個案或雲端歷史紀錄）`)) {
+        try { localStorage.removeItem(key); } catch (_) {}
+        if (mealMetrics) mealMetrics.coughCount = 0;
+        renderCoughRecords();
+        updateCoughBadge();
     }
 }
 
-// 🎯 全域 Window 顯式綁定 (全瀏覽器與載入時序雙重保險)
+// 🎯 全域 Window 顯式綁定
 window.selectDiet = selectDiet;
 window.openLoginModal = openLoginModal;
 window.closeLoginModal = closeLoginModal;
 window.loginAsPatient = loginAsPatient;
 window._fullLoginAsPatient = loginAsPatient;
+window.showAddPatientView = showAddPatientView;
+window.showPatientListView = showPatientListView;
+window.saveAndLoginNewPatient = saveAndLoginNewPatient;
+window.getCoughRecords = getCoughRecords;
+window.recordCoughEvent = recordCoughEvent;
+window.openCoughRecordModal = openCoughRecordModal;
+window.closeCoughRecordModal = closeCoughRecordModal;
+window.clearAllCoughRecords = clearAllCoughRecords;
+window.updateCoughBadge = updateCoughBadge;
+window.isMealSessionActive = () => Boolean(isMealActive);
+window.isPatientKioskLocked = () => Boolean(isKioskLocked);
 window.startMealSession = startMealSession;
 window.endMealSession = endMealSession;
 window.dismissAlertOverlay = dismissAlertOverlay;
 
-// 🎯 事件委派 (Event Delegation Backup) - 防止舊快取或內聯 onclick 失敗
+// 🎯 事件委派 (雲端個案按鈕點擊進入待機)
 document.addEventListener('click', (evt) => {
     const btn = evt.target.closest('[data-patient-code]');
     if (btn) {
@@ -530,6 +1042,10 @@ async function getWebcamStream() {
 }
 
 async function startMealSession() {
+    if (!currentPatient || !currentPatient.id) {
+        openLoginModal();
+        return;
+    }
     if (isMealActive && webcamStream) {
         console.log('[Camera] Meal session already active.');
         return;
@@ -584,27 +1100,19 @@ async function startMealSession() {
             jawVelocity: 0.0,
             jawStillTime: 0.0,
             currentBiteChews: 0,
+            swallowCount: 0,
+            coughCount: 0,
             coughCountL1: 0,
             coughCountL2: 0,
             chokingEventsL3: 0,
             pouchingEvents: 0,
             riskLevel: 'NORMAL'
         };
-        swallowPauseTracker.reset();
+        window.mealMetrics = mealMetrics;
 
         isMealActive = true;
-        const btnStart = document.getElementById('btn-start-meal');
-        const btnEnd = document.getElementById('btn-end-meal');
-
-        if (btnStart) {
-            btnStart.disabled = true;
-            btnStart.classList.add('opacity-50', 'cursor-not-allowed');
-        }
-        if (btnEnd) {
-            btnEnd.disabled = false;
-            btnEnd.classList.remove('opacity-50', 'cursor-not-allowed', 'bg-slate-800', 'text-slate-500');
-            btnEnd.classList.add('bg-rose-600', 'text-white', 'hover:bg-rose-500');
-        }
+        setStandbyOverlayVisible(false);
+        syncMealAndSwitchControls();
 
         const mealStatusText = document.getElementById('meal-status-text');
         if (mealStatusText) mealStatusText.innerText = '用餐中 🍽️';
@@ -645,6 +1153,13 @@ async function startMealSession() {
             window.ConnectionCore.stopMediaStream(stream);
         }
         if (webcamVideo) webcamVideo.srcObject = null;
+        setStandbyOverlayVisible(
+            true,
+            '⚠️ 相機權限受限',
+            '請允許瀏覽器存取攝影機與麥克風後，再次點擊下方「🍽️ 開始用餐」。',
+            '📷'
+        );
+        syncMealAndSwitchControls();
         const isSecure = window.isSecureContext;
         let hintMsg = "無法取得相機權限！\n\n";
         if (!isSecure) {
@@ -685,9 +1200,10 @@ async function endMealSession() {
             ? (mealMetrics.chewDurations.reduce((a, b) => a + b, 0) / mealMetrics.chewDurations.length)
             : currentPatient.baseline_chew;
 
-        // 關閉結束按鈕，保持開始按鈕鎖定，避免結束流程尚未完成就開始下一餐
+        // 關閉結束按鈕與身分切換，保持開始按鈕鎖定，避免結束流程尚未完成就開始下一餐或切換個案
         const btnStart = document.getElementById('btn-start-meal');
         const btnEnd = document.getElementById('btn-end-meal');
+        const btnSwitch = document.getElementById('btn-login-modal');
         if (btnStart) {
             btnStart.disabled = true;
             btnStart.classList.add('opacity-50', 'cursor-not-allowed');
@@ -695,6 +1211,9 @@ async function endMealSession() {
         if (btnEnd) {
             btnEnd.disabled = true;
             btnEnd.classList.add('opacity-50', 'cursor-not-allowed');
+        }
+        if (btnSwitch) {
+            btnSwitch.disabled = true;
         }
         document.getElementById('meal-status-text').innerText = '用餐結束，正在儲存紀錄…';
 
@@ -709,6 +1228,8 @@ async function endMealSession() {
                         try { track.stop(); } catch (err) { console.warn('[Camera] Track stop failed:', err); }
                     });
                 }
+                if (webcamVideo) webcamVideo.srcObject = null;
+                clearCanvasFrame();
                 if (peerConnection) {
                     const connection = peerConnection;
                     peerConnection = null;
@@ -745,8 +1266,8 @@ async function endMealSession() {
                     end_time: endTime.toISOString(),
                     total_duration_sec: durationSec,
                     total_chew_count: mealMetrics.totalChews,
+                    total_swallow_count: mealMetrics.swallowCount || 0,
                     avg_chew_duration: parseFloat(avgChewTime.toFixed(2)),
-                    avg_swallow_pause: swallowPauseTracker.snapshot().average,
                     cough_count_l1: mealMetrics.coughCountL1,
                     cough_count_l2: mealMetrics.coughCountL2,
                     choking_events_l3: mealMetrics.chokingEventsL3,
@@ -764,9 +1285,18 @@ async function endMealSession() {
     } finally {
         mealSessionTracker.clear();
         currentMealSessionInsertPromise = Promise.resolve(null);
-        document.getElementById('btn-start-meal').disabled = false;
-        document.getElementById('btn-start-meal').classList.remove('opacity-50', 'cursor-not-allowed');
-        document.getElementById('meal-status-text').innerText = '用餐結束 ⏹️';
+        activeAlertLevel = null;
+        activeAlertMessage = null;
+        activeAlertBaseMessage = null;
+        dismissAlertOverlay();
+        setStandbyOverlayVisible(
+            true,
+            `用餐已結束：${currentPatient.full_name} (${currentPatient.patient_code})`,
+            '紀錄已儲存並返回待機狀態。若要開始下一餐請點擊「🍽️ 開始用餐」，或點右上角切換個案。',
+            isKioskLocked ? '🔒' : '✅'
+        );
+        syncMealAndSwitchControls();
+        document.getElementById('meal-status-text').innerText = '用餐結束（待機中）⏹️';
         alert(`用餐完成！\n總時間: ${durationSec} 秒\n累積咀嚼: ${mealMetrics.totalChews} 次\n平均單次咀嚼耗時: ${avgChewTime.toFixed(2)} 秒`);
         mealStartLock.release();
     }
@@ -1156,7 +1686,6 @@ async function processVideoFrame(now) {
             }
         } else if (currentState === ST_SWALLOW) {
             if ((currentTime - stateStartTime) > 0.6) {
-                swallowPauseTracker.record(currentTime - stateStartTime);
                 currentState = ST_CHECK;
                 stateStartTime = currentTime;
                 mealMetrics.swallowCount = (mealMetrics.swallowCount || 0) + 1;

@@ -86,8 +86,18 @@
                 </div>
             </div>
 
-            <!-- 即時數據：僅保留咳嗽事件卡片 -->
-            <div class="grid grid-cols-1 gap-2.5">
+            <!-- 即時數據：精簡顯示咀嚼、吞嚥與咳嗽 -->
+            <div class="grid grid-cols-3 gap-2.5">
+                <div class="bg-slate-900 border border-slate-800 p-3 rounded-2xl">
+                    <span class="text-[10px] text-slate-400 block">累積咀嚼</span>
+                    <span id="stat-chews" class="text-xl font-black font-mono text-emerald-400">0</span>
+                    <span class="text-[9px] text-slate-500 block">次</span>
+                </div>
+                <div class="bg-slate-900 border border-slate-800 p-3 rounded-2xl">
+                    <span class="text-[10px] text-slate-400 block">成功吞嚥</span>
+                    <span id="stat-swallows" class="text-xl font-black font-mono text-blue-400">0</span>
+                    <span class="text-[9px] text-slate-500 block">次</span>
+                </div>
                 <div class="bg-slate-900 border border-slate-800 p-3 rounded-2xl">
                     <span class="text-[10px] text-slate-400 block">咳嗽事件</span>
                     <span id="stat-coughs" class="text-xl font-black font-mono text-rose-400">0</span>
@@ -107,7 +117,7 @@
                         <span>🎯</span>
                         <span>個人化動態基準校正面板</span>
                     </h3>
-                    <span class="text-[10px] bg-blue-500/10 text-blue-400 px-2 py-0.5 rounded border border-blue-500/20">3餐自適應學習</span>
+                    <span class="text-[10px] bg-blue-500/10 text-blue-400 px-2 py-0.5 rounded border border-blue-500/20">咀嚼基準自適應</span>
                 </div>
 
                 <div class="space-y-2 text-xs">
@@ -116,13 +126,13 @@
                         <span id="base-chew-sec" class="font-mono font-bold text-emerald-400">0.85 秒</span>
                     </div>
                     <div class="flex justify-between items-center bg-slate-800/50 p-2.5 rounded-xl border border-slate-700/50">
-                        <span class="text-slate-400">平均吞嚥停頓時間基线:</span>
+                        <span class="text-slate-400">吞嚥停頓參考基準（每餐趨勢暫緩）:</span>
                         <span id="base-swallow-sec" class="font-mono font-bold text-emerald-400">1.10 秒</span>
                     </div>
                 </div>
 
                 <div class="text-[11px] text-slate-500 italic bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                    💡 說明：前3餐套用臨床通用標準。系統將於個案完成第4餐起，自動根據個人歷史平均值 (μ ± σ) 更新其專屬基準。
+                    💡 說明：第 4 餐起依個案歷史更新咀嚼基準；吞嚥停頓目前僅顯示設定參考，尚未納入每餐趨勢。
                 </div>
             </div>
 
@@ -174,13 +184,6 @@
                         <canvas id="chart-chew-trend"></canvas>
                     </div>
                 </div>
-                <!-- 吞嚥停頓趨勢 -->
-                <div class="bg-slate-950 p-4 rounded-2xl border border-slate-800">
-                    <h4 class="text-xs font-semibold text-slate-400 mb-3">每餐平均吞嚥停頓（對照個案基準）</h4>
-                    <div class="h-48 relative">
-                        <canvas id="chart-swallow-trend"></canvas>
-                    </div>
-                </div>
             </div>
 
             <div class="space-y-2">
@@ -192,9 +195,9 @@
     </main>
 
     <!-- 腳本引用 -->
-    <script src="config.js?v=20261106_af38a52"></script>
-    <script src="connection-core.js?v=20261106_af38a52"></script>
-    <script src="auth-ui.js?v=20261106_af38a52"></script>
-    <script src="caregiver.js?v=20261106_af38a52"></script>
+    <script src="config.js?v=20261106_b8e41c2"></script>
+    <script src="connection-core.js?v=20261106_b8e41c2"></script>
+    <script src="auth-ui.js?v=20261106_b8e41c2"></script>
+    <script src="caregiver.js?v=20261106_b8e41c2"></script>
 </body>
 </html>

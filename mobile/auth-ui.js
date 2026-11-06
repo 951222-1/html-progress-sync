@@ -6,18 +6,20 @@
         const style = document.createElement('style');
         style.id = 'supabase-auth-styles';
         style.textContent = `
-            #supabase-auth-gate { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; padding: 20px; background: rgba(2,6,23,.92); color: #e2e8f0; font-family: system-ui, sans-serif; }
-            #supabase-auth-gate * { box-sizing: border-box; }
-            #supabase-auth-gate .auth-card { width: min(100%, 420px); padding: 26px; border: 1px solid #334155; border-radius: 20px; background: #0f172a; box-shadow: 0 24px 80px rgba(0,0,0,.45); }
-            #supabase-auth-gate h2 { margin: 0 0 8px; font-size: 22px; }
-            #supabase-auth-gate p { color: #94a3b8; line-height: 1.55; font-size: 14px; }
-            #supabase-auth-gate label { display:block; margin: 14px 0 6px; color:#cbd5e1; font-size:13px; }
-            #supabase-auth-gate input { width:100%; padding:12px 13px; border:1px solid #475569; border-radius:10px; background:#020617; color:#f8fafc; font-size:16px; }
-            #supabase-auth-gate button { cursor:pointer; border:0; border-radius:10px; padding:12px 14px; font-size:15px; font-weight:700; }
-            #supabase-auth-submit { width:100%; margin-top:18px; background:#2563eb; color:white; }
-            #supabase-auth-submit:disabled { opacity:.55; cursor:wait; }
+            #supabase-auth-gate, #supabase-auth-reverify { position: fixed; inset: 0; z-index: 10000; display: grid; place-items: center; padding: 20px; background: rgba(2,6,23,.92); color: #e2e8f0; font-family: system-ui, sans-serif; }
+            #supabase-auth-reverify { z-index: 10001; }
+            #supabase-auth-gate *, #supabase-auth-reverify * { box-sizing: border-box; }
+            #supabase-auth-gate .auth-card, #supabase-auth-reverify .auth-card { width: min(100%, 420px); padding: 26px; border: 1px solid #334155; border-radius: 20px; background: #0f172a; box-shadow: 0 24px 80px rgba(0,0,0,.45); }
+            #supabase-auth-gate h2, #supabase-auth-reverify h2 { margin: 0 0 8px; font-size: 22px; }
+            #supabase-auth-gate p, #supabase-auth-reverify p { color: #94a3b8; line-height: 1.55; font-size: 14px; }
+            #supabase-auth-gate label, #supabase-auth-reverify label { display:block; margin: 14px 0 6px; color:#cbd5e1; font-size:13px; }
+            #supabase-auth-gate input, #supabase-auth-reverify input { width:100%; padding:12px 13px; border:1px solid #475569; border-radius:10px; background:#020617; color:#f8fafc; font-size:16px; }
+            #supabase-auth-gate button, #supabase-auth-reverify button { cursor:pointer; border:0; border-radius:10px; padding:12px 14px; font-size:15px; font-weight:700; }
+            #supabase-auth-submit, #supabase-reverify-submit { width:100%; margin-top:18px; background:#2563eb; color:white; }
+            #supabase-auth-submit:disabled, #supabase-reverify-submit:disabled { opacity:.55; cursor:wait; }
+            #supabase-reverify-cancel { width:100%; margin-top:10px; background:#1e293b; color:#cbd5e1; border:1px solid #334155 !important; }
             #supabase-auth-mode { margin-top:12px; background:transparent; color:#93c5fd; padding:8px 0 !important; }
-            #supabase-auth-message { min-height:24px; margin:12px 0 0; font-size:13px; color:#fbbf24; }
+            #supabase-auth-message, #supabase-reverify-message { min-height:24px; margin:12px 0 0; font-size:13px; color:#fbbf24; }
             #supabase-auth-logout { position:fixed; right:12px; bottom:12px; z-index:9000; border:1px solid #475569; border-radius:10px; padding:8px 11px; background:rgba(15,23,42,.92); color:#cbd5e1; font:600 12px system-ui,sans-serif; }
         `;
         document.head.appendChild(style);
@@ -114,6 +116,128 @@
         return gate;
     }
 
+    function purgeLocalState() {
+        const core = window.ConnectionCore;
+        for (const store of [window.localStorage, window.sessionStorage]) {
+            try {
+                if (core && typeof core.purgeAllLocalPatientKeys === 'function') {
+                    core.purgeAllLocalPatientKeys(store);
+                } else if (store && typeof store.removeItem === 'function') {
+                    store.removeItem('anti_choke_patient_list');
+                    store.removeItem('anti_choke_cough_records');
+                }
+            } catch (_) {
+                // Ignore storage cleanup errors in restricted browser contexts.
+            }
+        }
+    }
+
+    async function verifyCurrentPassword(client, reasonText) {
+        addStyles();
+        let email = '';
+        try {
+            const { data } = await client.auth.getUser();
+            email = (data && data.user && data.user.email) ? String(data.user.email).trim() : '';
+        } catch (_) {}
+        if (!email) {
+            try {
+                const { data } = await client.auth.getSession();
+                email = (data && data.session && data.session.user && data.session.user.email)
+                    ? String(data.session.user.email).trim()
+                    : '';
+            } catch (_) {}
+        }
+        if (!email) return false;
+
+        const existing = document.getElementById('supabase-auth-reverify');
+        if (existing) existing.remove();
+
+        return new Promise((resolve) => {
+            const modal = document.createElement('div');
+            modal.id = 'supabase-auth-reverify';
+            modal.setAttribute('role', 'dialog');
+            modal.setAttribute('aria-modal', 'true');
+
+            const card = document.createElement('form');
+            card.className = 'auth-card';
+
+            const title = document.createElement('h2');
+            title.textContent = '🔒 照護員密碼驗證';
+
+            const desc = document.createElement('p');
+            desc.textContent = reasonText || '此平板已鎖定於當前個案，請輸入照護帳號密碼以繼續。';
+
+            const acct = document.createElement('p');
+            acct.style.marginBottom = '4px';
+            acct.style.color = '#cbd5e1';
+            acct.textContent = `驗證帳號：${email}`;
+
+            const label = document.createElement('label');
+            label.setAttribute('for', 'supabase-reverify-password');
+            label.textContent = '照護帳號密碼';
+
+            const input = document.createElement('input');
+            input.id = 'supabase-reverify-password';
+            input.type = 'password';
+            input.autocomplete = 'current-password';
+            input.required = true;
+
+            const submitBtn = document.createElement('button');
+            submitBtn.id = 'supabase-reverify-submit';
+            submitBtn.type = 'submit';
+            submitBtn.textContent = '驗證解鎖';
+
+            const cancelBtn = document.createElement('button');
+            cancelBtn.id = 'supabase-reverify-cancel';
+            cancelBtn.type = 'button';
+            cancelBtn.textContent = '取消';
+
+            const msg = document.createElement('p');
+            msg.id = 'supabase-reverify-message';
+            msg.setAttribute('role', 'status');
+            msg.setAttribute('aria-live', 'polite');
+
+            card.append(title, desc, acct, label, input, submitBtn, cancelBtn, msg);
+            modal.appendChild(card);
+            document.body.appendChild(modal);
+
+            let settled = false;
+            const close = (result) => {
+                if (settled) return;
+                settled = true;
+                modal.remove();
+                resolve(result);
+            };
+
+            cancelBtn.addEventListener('click', () => close(false));
+
+            card.addEventListener('submit', async (evt) => {
+                evt.preventDefault();
+                const password = input.value;
+                if (!password) {
+                    msg.textContent = '請輸入密碼。';
+                    return;
+                }
+                submitBtn.disabled = true;
+                msg.textContent = '正在驗證密碼…';
+                try {
+                    const { data, error } = await client.auth.signInWithPassword({ email, password });
+                    if (error || !data || !data.user) {
+                        msg.textContent = '密碼不正確，請重新輸入。';
+                        return;
+                    }
+                    close(true);
+                } catch (_) {
+                    msg.textContent = '密碼驗證失敗，請稍後再試。';
+                } finally {
+                    submitBtn.disabled = false;
+                }
+            });
+
+            input.focus();
+        });
+    }
+
     function renderLogout(client) {
         addStyles();
         let button = document.getElementById('supabase-auth-logout');
@@ -123,7 +247,19 @@
         button.type = 'button';
         button.textContent = '登出帳號';
         button.addEventListener('click', async () => {
+            if (typeof window.isMealSessionActive === 'function' && window.isMealSessionActive()) {
+                alert('目前正在進行用餐監測，請先點擊「結束用餐」完成紀錄儲存後再登出帳號。');
+                return;
+            }
+            if (typeof window.isPatientKioskLocked === 'function' && window.isPatientKioskLocked()) {
+                const verified = await verifyCurrentPassword(
+                    client,
+                    '此平板已鎖定於當前個案。請輸入照護帳號密碼以登出帳號。'
+                );
+                if (!verified) return;
+            }
             button.disabled = true;
+            purgeLocalState();
             await client.auth.signOut();
             location.reload();
         });
@@ -131,6 +267,10 @@
     }
 
     async function requireAuth(client, pageLabel) {
+        if (window.ConnectionCore && typeof window.ConnectionCore.purgeLegacySharedPatientKeys === 'function') {
+            window.ConnectionCore.purgeLegacySharedPatientKeys(window.localStorage);
+            window.ConnectionCore.purgeLegacySharedPatientKeys(window.sessionStorage);
+        }
         const { data, error } = await client.auth.getSession();
         if (error) throw error;
         if (data.session && data.session.user) {
@@ -150,9 +290,16 @@
         const gate = document.createElement('div');
         gate.id = 'supabase-auth-gate';
         gate.setAttribute('role', 'alert');
-        gate.innerHTML = `<div class="auth-card"><h2>線上連線尚未設定</h2><p>${message}</p></div>`;
+        const card = document.createElement('div');
+        card.className = 'auth-card';
+        const title = document.createElement('h2');
+        title.textContent = '線上連線尚未設定';
+        const body = document.createElement('p');
+        body.textContent = message;
+        card.append(title, body);
+        gate.appendChild(card);
         document.body.appendChild(gate);
     }
 
-    window.AuthUI = Object.freeze({ requireAuth, showSetupError });
+    window.AuthUI = Object.freeze({ requireAuth, showSetupError, verifyCurrentPassword, purgeLocalState });
 })();

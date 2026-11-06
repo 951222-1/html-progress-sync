@@ -363,26 +363,6 @@
         });
     }
 
-    function createSwallowPauseTracker() {
-        let total = 0;
-        let count = 0;
-        const snapshot = () => ({ count, average: count ? total / count : null });
-        return Object.freeze({
-            record(durationSec) {
-                const value = Number(durationSec);
-                if (!Number.isFinite(value) || value < 0) return snapshot();
-                total += value;
-                count += 1;
-                return snapshot();
-            },
-            snapshot,
-            reset() {
-                total = 0;
-                count = 0;
-            }
-        });
-    }
-
     function summarizeMealEventsBySession(sessions, eventLogs, eventLogsAvailable = true) {
         const items = Array.isArray(sessions) ? sessions : [];
         const logs = Array.isArray(eventLogs) ? eventLogs : [];
@@ -440,5 +420,74 @@
         });
     }
 
-    return Object.freeze({ channelTopic, privateChannelOptions, createCandidateBuffer, takeMatchingCandidates, canReplaceAlertLevel, resolveVisibilityAlert, createFaceLossWarningGuard, countDirectionReversals, evaluateL4Candidate, createChokeDangerAccumulator, latestSessionsChronological, stopMediaStream, finalizeMealSession, createMealSessionTracker, createSwallowPauseTracker, summarizeMealEventsBySession, createStartLock, createNegotiationGate });
+    function coughStorageKey(ownerId, patientCode) {
+        const owner = String(ownerId || '').trim();
+        const code = String(patientCode || '').trim();
+        if (!owner || !/^[A-Za-z0-9_-]{1,32}$/.test(code)) return null;
+        return `anti_choke_cough_records:${owner}:${code}`;
+    }
+
+    function kioskLockStorageKey(ownerId) {
+        const owner = String(ownerId || '').trim();
+        if (!owner) return null;
+        return `anti_choke_kiosk_lock:${owner}`;
+    }
+
+    function nextPatientCode(existingProfiles) {
+        const items = Array.isArray(existingProfiles) ? existingProfiles : [];
+        const used = new Set();
+        let maxNum = 0;
+        for (const item of items) {
+            const raw = String((item && (item.patient_code || item.code)) || '').trim().toUpperCase();
+            if (!raw) continue;
+            used.add(raw);
+            const match = raw.match(/^P(\d+)$/);
+            if (match) {
+                const num = parseInt(match[1], 10);
+                if (Number.isFinite(num) && num > maxNum) maxNum = num;
+            }
+        }
+        let next = maxNum + 1;
+        let candidate = 'P' + String(next).padStart(3, '0');
+        while (used.has(candidate)) {
+            next += 1;
+            candidate = 'P' + String(next).padStart(3, '0');
+        }
+        return candidate;
+    }
+
+    function purgeLegacySharedPatientKeys(storage) {
+        if (!storage || typeof storage.removeItem !== 'function') return;
+        for (const key of ['anti_choke_patient_list', 'anti_choke_cough_records']) {
+            try {
+                storage.removeItem(key);
+            } catch (_) {
+                // Ignore restricted storage environments.
+            }
+        }
+    }
+
+    function purgeAllLocalPatientKeys(storage) {
+        if (!storage) return;
+        try {
+            if (typeof storage.length === 'number' && typeof storage.key === 'function') {
+                const keysToRemove = [];
+                for (let i = 0; i < storage.length; i++) {
+                    const key = storage.key(i);
+                    if (typeof key === 'string' && key.startsWith('anti_choke_')) {
+                        keysToRemove.push(key);
+                    }
+                }
+                for (const key of keysToRemove) {
+                    storage.removeItem(key);
+                }
+                return;
+            }
+        } catch (_) {
+            // Fall through to explicit legacy removal.
+        }
+        purgeLegacySharedPatientKeys(storage);
+    }
+
+    return Object.freeze({ channelTopic, privateChannelOptions, createCandidateBuffer, takeMatchingCandidates, canReplaceAlertLevel, resolveVisibilityAlert, createFaceLossWarningGuard, countDirectionReversals, evaluateL4Candidate, createChokeDangerAccumulator, latestSessionsChronological, stopMediaStream, finalizeMealSession, createMealSessionTracker, summarizeMealEventsBySession, createStartLock, createNegotiationGate, coughStorageKey, kioskLockStorageKey, nextPatientCode, purgeLegacySharedPatientKeys, purgeAllLocalPatientKeys });
 });

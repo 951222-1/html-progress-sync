@@ -25,8 +25,7 @@ let buzzerInterval = null;
 // Chart.js 實例變數
 let anomaliesChart = null;
 let chewTrendChart = null;
-let swallowTrendChart = null;
-let currentPatientBaselines = { chew: 0.85, swallow: 1.10 };
+let currentPatientBaselines = { chew: 0.85 };
 let currentHistoryRange = 'recent7';
 let historyRequestGeneration = 0;
 
@@ -195,12 +194,12 @@ function resetCaregiverPatientView() {
         logContainer.replaceChildren(emptyMessage);
     }
     historyRequestGeneration += 1;
-    currentPatientBaselines = { chew: 0.85, swallow: 1.10 };
+    currentPatientBaselines = { chew: 0.85 };
     const historyRangeSelect = document.getElementById('caregiver-history-range');
     if (historyRangeSelect) historyRangeSelect.disabled = true;
     setMealHistoryStatus('尚未選擇個案');
     renderMealHistory([], currentHistoryRange);
-    if (anomaliesChart && chewTrendChart && swallowTrendChart) updateCharts([]);
+    if (anomaliesChart && chewTrendChart) updateCharts([]);
 }
 
 async function connectToPatient(code = document.getElementById('caregiver-patient-select')?.value, options = {}) {
@@ -251,8 +250,7 @@ async function connectToPatient(code = document.getElementById('caregiver-patien
         currentPatientCode = profile.patient_code;
         currentPatientProfileId = profile.id;
         currentPatientBaselines = {
-            chew: Number(profile.baseline_chew_duration) || 0.85,
-            swallow: Number(profile.baseline_swallow_pause) || 1.10
+            chew: Number(profile.baseline_chew_duration) || 0.85
         };
         const historyRangeSelect = document.getElementById('caregiver-history-range');
         if (historyRangeSelect) historyRangeSelect.disabled = false;
@@ -423,7 +421,10 @@ function renderMealHistory(sessions, range = currentHistoryRange) {
         const chewValue = session.total_chew_count;
         const chews = chewValue === null || chewValue === undefined || !Number.isFinite(Number(chewValue))
             ? '咀嚼數未記錄' : `咀嚼 ${Number(chewValue).toFixed(1)} 次`;
-        summary.textContent = `${dateLabel}｜${dietName}｜${duration}｜${chews}｜平均咀嚼 ${showSeconds(session.avg_chew_duration)}｜吞嚥停頓 ${showSeconds(session.avg_swallow_pause)}｜${riskLabels[session.risk_level] || session.risk_level || '風險未記錄'}`;
+        const swallowValue = session.total_swallow_count;
+        const swallows = swallowValue === null || swallowValue === undefined || !Number.isFinite(Number(swallowValue))
+            ? '吞嚥數未記錄' : `吞嚥 ${Number(swallowValue)} 次`;
+        summary.textContent = `${dateLabel}｜${dietName}｜${duration}｜${chews}｜${swallows}｜平均咀嚼 ${showSeconds(session.avg_chew_duration)}｜${riskLabels[session.risk_level] || session.risk_level || '風險未記錄'}`;
         details.appendChild(summary);
 
         const body = document.createElement('div');
@@ -468,7 +469,6 @@ function renderMealHistory(sessions, range = currentHistoryRange) {
 function initCharts() {
     const ctxAnomalies = document.getElementById('chart-anomalies').getContext('2d');
     const ctxChew = document.getElementById('chart-chew-trend').getContext('2d');
-    const ctxSwallow = document.getElementById('chart-swallow-trend').getContext('2d');
 
     anomaliesChart = new Chart(ctxAnomalies, {
         type: 'bar',
@@ -514,30 +514,11 @@ function initCharts() {
         }
     });
 
-    swallowTrendChart = new Chart(ctxSwallow, {
-        type: 'line',
-        data: {
-            labels: [],
-            datasets: [
-                { label: '平均吞嚥停頓 (s)', data: [], borderColor: '#a78bfa', backgroundColor: 'rgba(167, 139, 250, 0.1)', fill: true, tension: 0.3 },
-                { label: '個案吞嚥基準', data: [], borderColor: '#fbbf24', borderDash: [4, 4], pointRadius: 0 }
-            ]
-        },
-        options: {
-            responsive: true,
-            maintainAspectRatio: false,
-            scales: {
-                x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { display: false } },
-                y: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#334155' } }
-            },
-            plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 10 } } } }
-        }
-    });
     updateCharts([]);
 }
 
 function updateCharts(sessions = []) {
-    if (!anomaliesChart || !chewTrendChart || !swallowTrendChart) return;
+    if (!anomaliesChart || !chewTrendChart) return;
     const labels = sessions.map(session => {
         const date = new Date(session.start_time || session.created_at);
         return Number.isFinite(date.getTime())
@@ -568,11 +549,6 @@ function updateCharts(sessions = []) {
     chewTrendChart.data.datasets[0].data = sessions.map(session => valueFor(session, 'avg_chew_duration'));
     chewTrendChart.data.datasets[1].data = new Array(labels.length).fill(currentPatientBaselines.chew);
     chewTrendChart.update();
-
-    swallowTrendChart.data.labels = labels;
-    swallowTrendChart.data.datasets[0].data = sessions.map(session => valueFor(session, 'avg_swallow_pause'));
-    swallowTrendChart.data.datasets[1].data = new Array(labels.length).fill(currentPatientBaselines.swallow);
-    swallowTrendChart.update();
 }
 
 // 5. WebRTC P2P 影音接收與 Supabase Realtime 信令
