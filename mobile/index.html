@@ -19,7 +19,14 @@
         window.FaceLandmarker = vision.FaceLandmarker;
         window.HandLandmarker = vision.HandLandmarker;
     </script>
-    <link rel="stylesheet" href="style.css">
+    <!-- MediaPipe Tasks Audio CDN (Google YAMNet AI 咳嗽聲辨識模型) -->
+    <script type="module">
+        import * as audioTasks from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.0";
+        window.tasksAudio = audioTasks;
+        window.AudioFilesetResolver = audioTasks.FilesetResolver;
+        window.AudioClassifier = audioTasks.AudioClassifier;
+    </script>
+    <link rel="stylesheet" href="style.css?v=20261106_yamnet_v1">
     <!-- 🛡️ 全域優先同步定義 (不依賴任何外部檔案載入時序，開箱即用) -->
     <script>
         window.currentPatient = window.currentPatient || { id: null, patient_code: 'P001', full_name: '王爺爺 (軟食)', diet_type: 'soft', baseline_chew: 0.85, baseline_swallow: 1.10 };
@@ -279,10 +286,8 @@
         window.updateCoughBadge = updateCoughBadge;
     </script>
     <!-- 核心設定與應用腳本引用 (置於 Head 提前解析) -->
-    <script src="config.js?v=20261104_2cae6fc"></script>
-    <script src="connection-core.js?v=20261104_2cae6fc"></script>
-    <script src="auth-ui.js?v=20261104_2cae6fc"></script>
-    <script src="app.js?v=20261104_2cae6fc"></script>
+    <script src="config.js?v=20261106_yamnet_v1"></script>
+    <script src="app.js?v=20261106_yamnet_v1"></script>
 </head>
 <body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col justify-between select-none">
 
@@ -397,9 +402,9 @@
                 <span id="hud-action-state" class="font-bold text-xs text-slate-200">👄 準備用餐中...</span>
             </div>
 
-            <!-- 右上角 聲音波形 HUD -->
-            <div class="absolute top-3 right-3 bg-slate-900/80 backdrop-blur px-2.5 py-1.5 rounded-xl border border-slate-700/60 flex items-center space-x-2">
-                <span class="text-[10px] text-slate-400">🎤 聲音</span>
+            <!-- 右上角 聲音波形與 AI 咳嗽聽診狀態 HUD -->
+            <div id="hud-mic-pill" class="absolute top-3 right-3 bg-slate-900/80 backdrop-blur px-2.5 py-1.5 rounded-xl border border-slate-700/60 flex items-center space-x-2 transition-colors duration-200">
+                <span id="hud-mic-label" class="text-[10px] text-slate-400">🎤 AI載入中</span>
                 <div class="w-12 h-2 bg-slate-800 rounded-full overflow-hidden">
                     <div id="hud-mic-bar" class="h-full bg-blue-500 w-0 transition-all duration-75"></div>
                 </div>
