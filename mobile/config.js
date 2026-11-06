@@ -4,8 +4,8 @@
 
 const CONFIG = {
     // 1. Supabase 設定 (預設載入示範用或可自訂)
-    SUPABASE_URL: "https://shcnvdnhrfmxfywzwtpm.supabase.co",
-    SUPABASE_PUBLISHABLE_KEY: "sb_publishable_Q-x-Jbhr7uWCEiHQM-Z4cA_-RqRd7K2",
+    SUPABASE_URL: window.ENV_SUPABASE_URL || "https://xyzcompany.supabase.co",
+    SUPABASE_ANON_KEY: window.ENV_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inh5emNvbXBhbnkiLCJyb2xlIjoiYW5vbiIsImlhdCI6MTY3MjUwMDAwMCwiZXhwIjoxOTg4MDY0MDAwfQ.sample_key",
 
     // 2. WebRTC STUN 伺服器設定
     RTC_CONFIG: {
