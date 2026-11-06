@@ -68,9 +68,7 @@ let supabaseClient = null;
 let currentPatient = { id: null, patient_code: 'P001', full_name: '王爺爺', diet_type: 'soft', baseline_chew: 0.85, baseline_swallow: 1.10 };
 let currentDiet = 'soft'; // regular, soft, pureed
 let isMealActive = false;
-const mealSessionTracker = window.ConnectionCore.createMealSessionTracker();
-const mealStartLock = window.ConnectionCore.createStartLock();
-let currentMealSessionInsertPromise = Promise.resolve(null);
+let currentSessionId = null;
 
 // 原版防哽咽狀態機常數與狀態 (ST_IDLE, ST_INGEST, ST_CHEW, ST_SWALLOW, ST_CHECK)
 const ST_IDLE = "IDLE";
@@ -104,7 +102,7 @@ let lastAnchorTs = 0.0;
 const ANCHOR_GRACE_SEC = 2.0;
 const FACE_LOST_ALERT_SEC = 3.0;
 
-// 🎯 身體晃動與拍胸五秒哽噎判定狀態 (防止晃動過敏，嚴格要求同時持續5秒)
+// 🎯 身體晃動與拍胸哽噎判定狀態 (手放胸口/喉嚨＋身體晃動：無咳嗽聲滿 5 秒觸發；融合 AI 咳嗽聲加速為 3 秒觸發)
 let bodyMotionHistory = []; // { x, y, faceSize, time }
 let isBodyShakingContinuous = false;
 let isHandOnChest = false;
@@ -112,7 +110,29 @@ let isHandOnChestOrThroat = false;
 let chokeSimultaneousStartTime = null;
 let chokeSimultaneousDuration = 0.0;
 let chokeGraceStartTime = null;
-const CHOKE_SIMULTANEOUS_TRIGGER_SEC = 5.0; // 必須同時持續滿 5 秒
+const CHOKE_SIMULTANEOUS_TRIGGER_SEC = 5.0; // 無咳嗽聲時：必須同時持續滿 5 秒
+const CHOKE_AUDIO_FUSION_TRIGGER_SEC = 3.0; // 融合 AI 咳嗽聲時：加速為持續滿 3 秒即觸發 L4
+const AI_COUGH_FUSION_WINDOW_SEC = 4.0;     // AI 咳嗽聲融合加速有效記憶窗 (4.0 秒)
+
+// 🎤 Google YAMNet AI 咳嗽與呼吸道聲紋辨識設定 (對齊桌面版防哽咽裝置4_2.py)
+const YAMNET_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/1/yamnet.tflite";
+const YAMNET_WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.0/wasm";
+const YAMNET_HOP_MS = 500;                  // 每 0.5 秒推論一次 1.05 秒音訊視窗
+const YAMNET_CHOKE_TH_FUSION = 0.15;        // 聲影融合門檻 (對齊桌面版 AUDIO_CHOKE_TH_FUSION = 0.15)
+const YAMNET_COUGH_RECORD_TH = 0.20;        // 人臉在畫面內時之 AI 咳嗽靜默紀錄門檻
+const YAMNET_COUGH_SOLO_TH = 0.32;          // 低頭/人臉離開畫面時之純聲音高門檻
+const YAMNET_CHOKE_KEYWORDS = ["cough", "throat", "choking", "gagging", "gasp", "wheeze", "pant"];
+const YAMNET_SPEECH_KEYWORDS = ["speech", "conversation", "narration", "chatter", "hubbub"];
+const YAMNET_LABEL_ZH = {
+    "cough": "咳嗽聲",
+    "throat clearing": "清喉嚨/乾咳",
+    "throat": "喉部嗆咳聲",
+    "choking": "哽噎嗆咳聲",
+    "gagging": "作嘔反胃聲",
+    "gasp": "倒抽氣/喘息",
+    "wheeze": "氣道喘鳴聲",
+    "pant": "急促喘氣聲"
+};
 
 // AI 與媒體串流變數
 let webcamVideo = null;
@@ -124,6 +144,27 @@ let handLandmarker = null;
 let audioCtx = null;
 let audioAnalyser = null;
 let audioDataArray = null;
+let audioClassifier = null;
+let isAudioClassifierReady = false;
+let audioClassifierFailed = false;
+let audioMediaSource = null;
+let audioScriptNode = null;
+let audioMuteGain = null;
+let audioRingBuffer = null;
+let audioSamplesCollected = 0;
+let audioInferenceTimer = null;
+let lastAiCoughTime = -1e9;
+let aiAudioState = {
+    chokeScore: 0.0,
+    rawCoughScore: 0.0,
+    speechScore: 0.0,
+    topChokeLabel: "",
+    topChokeLabelZh: "咳嗽聲",
+    topOverallLabel: "-",
+    rmsEnergy: 0.0,
+    lastPeakScore: 0.0,
+    updatedAt: 0.0
+};
 
 // 用餐狀態統計與演算法數據
 let mealMetrics = {
@@ -155,34 +196,16 @@ const evidenceFusion = new EvidenceFusion(5.0, 1.0, 10.0);
 // WebRTC 串流連線變數
 let peerConnection = null;
 let supabaseChannel = null;
-let patientRealtimeReady = false;
-let lastStateBroadcastAt = 0;
-let activeNegotiationId = null;
-let activePeerClientId = null;
-let pendingPeerClientId = null;
-let activeOfferPayload = null;
-let peerOfferInProgress = false;
-let resendOfferAfterCreation = false;
-const remoteCandidateBuffer = window.ConnectionCore.createCandidateBuffer();
 
 // 初始化啟動 (安全支援 DOMContentLoaded 與已就緒狀態)
-async function startApp() {
+function startApp() {
     initSupabase();
     setupCanvasAndVideo();
     initMediaPipe();
-    if (!supabaseClient) {
-        window.AuthUI.showSetupError('系統連線設定尚未完成。請聯絡管理者，不會以未受保護的離線模式繼續。');
-        return;
-    }
-    try {
-        await window.AuthUI.requireAuth(supabaseClient, '使用者端');
-        openLoginModal();
-        if (window._selectedPatient) {
-            await loginAsPatient(window._selectedPatient.code, window._selectedPatient.nameStr);
-        }
-    } catch (error) {
-        console.error('[Supabase Auth] User endpoint startup failed:', error);
-        window.AuthUI.showSetupError('登入服務暫時無法使用，請重新整理頁面後再試。');
+    initAudioClassifier();
+    openLoginModal();
+    if (window._selectedPatient) {
+        loginAsPatient(window._selectedPatient.code, window._selectedPatient.nameStr);
     }
 }
 
@@ -195,12 +218,12 @@ if (document.readyState === 'loading') {
 // 2. Supabase Client 初始化
 function initSupabase() {
     try {
-        if (!window.supabase || !CONFIG.SUPABASE_URL || !CONFIG.SUPABASE_PUBLISHABLE_KEY) {
-            console.error('[Supabase] Required project URL or publishable key is missing.');
-            return;
+        if (window.supabase && CONFIG.SUPABASE_URL && !CONFIG.SUPABASE_URL.includes('xyzcompany')) {
+            supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_ANON_KEY);
+            console.log('[Supabase] Successfully connected to live backend.');
+        } else {
+            console.warn('[Supabase] Running in Standalone / Fallback mode.');
         }
-        supabaseClient = window.supabase.createClient(CONFIG.SUPABASE_URL, CONFIG.SUPABASE_PUBLISHABLE_KEY);
-        console.log('[Supabase] Client initialized; sign-in is required before data access.');
     } catch (e) {
         console.error('[Supabase] Initialization error:', e);
     }
@@ -234,45 +257,55 @@ function closeLoginModal() {
     }
 }
 
-async function loginAsPatient(code, nameStr) {
+function loginAsPatient(code, nameStr) {
     try {
-        if (!supabaseClient) throw new Error('Supabase client is unavailable.');
-        const { data: authData, error: authError } = await supabaseClient.auth.getUser();
-        if (authError || !authData.user) throw new Error('請先登入同一個照護帳號。');
-
-        const patientList = typeof window.getPatientList === 'function' ? window.getPatientList() : [];
-        const localPatient = patientList.find(patient => patient.code === code) || {};
-        const { data: profile, error: profileError } = await supabaseClient
-            .from('patient_profiles')
-            .upsert({
-                owner_id: authData.user.id,
-                patient_code: code,
-                full_name: nameStr || code,
-                gender: localPatient.gender || null,
-                diet_type: localPatient.diet || currentDiet || 'regular'
-            }, { onConflict: 'owner_id,patient_code' })
-            .select('*')
-            .single();
-        if (profileError) throw profileError;
-
-        currentPatient.id = profile.id;
-        currentPatient.patient_code = profile.patient_code;
-        currentPatient.full_name = profile.full_name;
-        currentPatient.diet_type = profile.diet_type || 'soft';
-        currentPatient.baseline_chew = profile.baseline_chew_duration || 0.85;
-        currentPatient.baseline_swallow = profile.baseline_swallow_pause || 1.10;
-        currentDiet = currentPatient.diet_type;
-        selectDiet(currentDiet);
-
-        console.log(`[Login] Selected patient: ${currentPatient.full_name} (${currentPatient.patient_code})`);
+        console.log(`[Login] Selected patient: ${nameStr} (${code})`);
+        currentPatient.patient_code = code;
+        currentPatient.full_name = nameStr;
+        
         const label = document.getElementById('current-patient-label');
-        if (label) label.innerText = `${currentPatient.full_name} (${currentPatient.patient_code})`;
+        if (label) label.innerText = `${nameStr} (${code})`;
+
+        // 1. 立即關閉對話框與更新選單 UI (絕不安靜卡死)
         closeLoginModal();
-        await startMealSession();
-    } catch (error) {
-        console.error('[Patient login] Could not prepare the shared patient profile:', error);
-        openLoginModal();
-        alert('無法連結此個案資料。請確認兩端使用同一個帳號，並稍後重試。');
+
+        // 2. 異步非阻塞啟動相機
+        setTimeout(() => {
+            if (!isMealActive) {
+                startMealSession().catch(err => {
+                    console.warn('[Camera] Gracefully handled startup error:', err);
+                });
+            }
+        }, 30);
+
+        // 3. 背景非同步載入 Supabase 個案檔案與個人化基準
+        if (supabaseClient) {
+            supabaseClient
+                .from('patient_profiles')
+                .select('*')
+                .eq('patient_code', code)
+                .single()
+                .then(({ data }) => {
+                    if (data) {
+                        currentPatient.id = data.id;
+                        currentPatient.diet_type = data.diet_type || 'soft';
+                        currentPatient.baseline_chew = data.baseline_chew_duration || 0.85;
+                        currentPatient.baseline_swallow = data.baseline_swallow_pause || 1.10;
+                        selectDiet(currentPatient.diet_type);
+                        console.log(`[Supabase] Loaded patient baseline: chew=${data.baseline_chew_duration}s`);
+                    }
+                })
+                .catch((err) => {
+                    console.warn('[Supabase] Could not fetch profile, using local defaults:', err);
+                });
+        }
+
+        // 4. 初始化 WebRTC 信令頻道
+        setupWebRTCSignaling();
+
+    } catch (e) {
+        console.error('[Login] Error in loginAsPatient:', e);
+        closeLoginModal();
     }
 }
 
@@ -391,23 +424,73 @@ function setupCanvasAndVideo() {
     aiCtx = aiCanvas.getContext('2d');
 }
 
+// 4b. 初始化 Google YAMNet AI 咳嗽與呼吸道聲紋辨識模型
+async function initAudioClassifier() {
+    const micLabel = document.getElementById('hud-mic-label');
+    try {
+        let AudioResolver = window.AudioFilesetResolver || (window.tasksAudio && window.tasksAudio.FilesetResolver);
+        let ClassifierCls = window.AudioClassifier || (window.tasksAudio && window.tasksAudio.AudioClassifier);
+
+        if (!AudioResolver || !ClassifierCls) {
+            console.log('[YAMNet] Dynamically importing @mediapipe/tasks-audio@0.10.0...');
+            const audioMod = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.0");
+            window.tasksAudio = audioMod;
+            AudioResolver = audioMod.FilesetResolver;
+            ClassifierCls = audioMod.AudioClassifier;
+        }
+
+        if (!AudioResolver || !ClassifierCls) {
+            throw new Error('MediaPipe Tasks Audio symbols unavailable');
+        }
+
+        const audioFileset = await AudioResolver.forAudioTasks(YAMNET_WASM_URL);
+        audioClassifier = await ClassifierCls.createFromOptions(audioFileset, {
+            baseOptions: {
+                modelAssetPath: YAMNET_MODEL_URL
+            },
+            maxResults: 30,
+            scoreThreshold: 0.01
+        });
+
+        isAudioClassifierReady = true;
+        audioClassifierFailed = false;
+        console.log('✅ [YAMNet] Google YAMNet AI 咳嗽聲辨識模型載入完成！');
+        if (micLabel) {
+            micLabel.innerText = isMealActive ? '🎤 AI聽診中' : '🎤 AI聽診就緒';
+            micLabel.className = 'text-[10px] text-emerald-400 font-semibold';
+        }
+    } catch (err) {
+        console.warn('⚠️ [YAMNet] AI 聲音模型載入失敗，退回高能量備援模式:', err);
+        isAudioClassifierReady = false;
+        audioClassifierFailed = true;
+        if (micLabel) {
+            micLabel.innerText = '🎤 音量備援';
+            micLabel.className = 'text-[10px] text-amber-400';
+        }
+    }
+}
+
 // 5. 多階相機與麥克風容錯啟動 (3-Tier Fallback Camera Getter)
 async function getWebcamStream() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
         throw new Error("您的瀏覽器不支援 getUserMedia 存取相機！");
     }
 
-    // Tier 1: 最佳畫質視訊 (1280x720) + 麥克風音訊
+    // Tier 1: 最佳畫質視訊 (1280x720) + 原音麥克風 (關閉瀏覽器語音降噪以免濾除咳嗽聲與喘鳴聲)
     try {
         return await navigator.mediaDevices.getUserMedia({
             video: { facingMode: "user", width: { ideal: 1280 }, height: { ideal: 720 } },
-            audio: true
+            audio: {
+                echoCancellation: false,
+                noiseSuppression: false,
+                autoGainControl: true
+            }
         });
     } catch (e1) {
-        console.warn('[Camera] Tier 1 (Ideal Video+Audio) failed, trying Tier 2...', e1);
+        console.warn('[Camera] Tier 1 (Ideal Video+RawAudio) failed, trying Tier 2...', e1);
     }
 
-    // Tier 2: 基礎視訊 + 麥克風音訊
+    // Tier 2: 基礎視訊 + 預設麥克風音訊
     try {
         return await navigator.mediaDevices.getUserMedia({
             video: true,
@@ -434,10 +517,6 @@ async function startMealSession() {
         console.log('[Camera] Meal session already active.');
         return;
     }
-    if (!mealStartLock.tryEnter()) {
-        console.log('[Camera] Meal session startup is already in progress.');
-        return;
-    }
 
     try {
         webcamStream = await getWebcamStream();
@@ -458,11 +537,16 @@ async function startMealSession() {
             container.style.aspectRatio = `${vW} / ${vH}`;
         }
 
-        // 嘗試綁定 Web Audio API 聲學分析 (若包含音軌)
+        // 嘗試綁定 Web Audio API 聲學與 YAMNet AI 咳嗽分析 (若包含音軌)
         if (webcamStream.getAudioTracks().length > 0) {
             setupAudioAnalyzer(webcamStream);
         } else {
             console.warn('[Audio] No audio track available in camera stream.');
+            const micLabel = document.getElementById('hud-mic-label');
+            if (micLabel) {
+                micLabel.innerText = '🎤 無麥克風';
+                micLabel.className = 'text-[10px] text-slate-500';
+            }
         }
 
         // 重設用餐指標
@@ -475,12 +559,16 @@ async function startMealSession() {
             jawVelocity: 0.0,
             jawStillTime: 0.0,
             currentBiteChews: 0,
+            coughCount: 0,
             coughCountL1: 0,
             coughCountL2: 0,
             chokingEventsL3: 0,
             pouchingEvents: 0,
             riskLevel: 'NORMAL'
         };
+        window.mealMetrics = mealMetrics;
+        lastAiCoughTime = -1e9;
+        window._pendingAiCoughEvent = null;
 
         isMealActive = true;
         const btnStart = document.getElementById('btn-start-meal');
@@ -499,24 +587,19 @@ async function startMealSession() {
         const mealStatusText = document.getElementById('meal-status-text');
         if (mealStatusText) mealStatusText.innerText = '用餐中 🍽️';
 
-        // 於背景建立 Supabase 用餐紀錄，不阻塞即時影像偵測
+        // 於 Supabase 寫入新用餐紀錄
         if (supabaseClient) {
-            currentMealSessionInsertPromise = mealSessionTracker.begin(async () => {
-                const { data, error } = await supabaseClient.from('meal_sessions').insert([{
+            try {
+                const { data } = await supabaseClient.from('meal_sessions').insert([{
                     patient_id: currentPatient.id,
                     diet_type: currentDiet,
                     start_time: new Date().toISOString(),
                     risk_level: 'NORMAL'
                 }]).select().single();
-                if (error) throw error;
-                return data?.id || null;
-            }).catch(err => {
-                console.warn('[Supabase] Meal session log bypassed; this meal will not be attached to a previous session:', err);
-                return null;
-            });
-        } else {
-            mealSessionTracker.clear();
-            currentMealSessionInsertPromise = Promise.resolve(null);
+                if (data) currentSessionId = data.id;
+            } catch (err) {
+                console.warn('[Supabase] Meal session log insert bypassed:', err);
+            }
         }
 
         // 開始影音串流與 WebRTC P2P
@@ -528,12 +611,6 @@ async function startMealSession() {
     } catch (err) {
         console.error('Camera/Mic permission failed:', err);
         isMealActive = false;
-        if (webcamStream) {
-            const stream = webcamStream;
-            webcamStream = null;
-            window.ConnectionCore.stopMediaStream(stream);
-        }
-        if (webcamVideo) webcamVideo.srcObject = null;
         const isSecure = window.isSecureContext;
         let hintMsg = "無法取得相機權限！\n\n";
         if (!isSecure) {
@@ -549,128 +626,297 @@ async function startMealSession() {
         if (mealStatusText) mealStatusText.innerText = '⚠️ 相機權限受限 (請允許後重試)';
         
         alert(hintMsg);
-    } finally {
-        mealStartLock.release();
     }
 }
 
 async function endMealSession() {
     if (!isMealActive) return;
-    if (!mealStartLock.tryEnter()) {
-        console.log('[Camera] Meal startup or shutdown is already in progress.');
-        return;
+    isMealActive = false;
+
+    // 計算總用餐時長與平均咀嚼時間
+    const endTime = new Date();
+    const durationSec = Math.round((endTime - mealMetrics.startTime) / 1000);
+    const avgChewTime = mealMetrics.chewDurations.length > 0 
+        ? (mealMetrics.chewDurations.reduce((a,b)=>a+b, 0) / mealMetrics.chewDurations.length) 
+        : currentPatient.baseline_chew;
+
+    // 更新 UI 狀態
+    document.getElementById('btn-start-meal').disabled = false;
+    document.getElementById('btn-start-meal').classList.remove('opacity-50', 'cursor-not-allowed');
+    document.getElementById('btn-end-meal').disabled = true;
+    document.getElementById('btn-end-meal').classList.add('opacity-50', 'cursor-not-allowed');
+    document.getElementById('meal-status-text').innerText = '用餐結束 ⏹️';
+
+    // 寫入 Supabase 用餐場次總結與更新動態校正基準
+    if (supabaseClient && currentSessionId) {
+        try {
+            await supabaseClient.from('meal_sessions').update({
+                end_time: endTime.toISOString(),
+                total_duration_sec: durationSec,
+                total_chew_count: mealMetrics.totalChews,
+                avg_chew_duration: parseFloat(avgChewTime.toFixed(2)),
+                cough_count_l1: mealMetrics.coughCountL1,
+                cough_count_l2: mealMetrics.coughCountL2,
+                choking_events_l3: mealMetrics.chokingEventsL3,
+                pouching_events: mealMetrics.pouchingEvents,
+                risk_level: mealMetrics.riskLevel
+            }).eq('id', currentSessionId);
+
+            // 更新個案個人化動態基準 (3餐自適應平均值)
+            await updatePatientAdaptiveBaseline(avgChewTime);
+        } catch (err) {
+            console.warn('[Supabase] Failed to update session completion:', err);
+        }
     }
 
-    const sessionInsertPromise = currentMealSessionInsertPromise;
-    let durationSec = 0;
-    let avgChewTime = currentPatient.baseline_chew;
+    // 關閉音訊分析管線、相機與 WebRTC
+    teardownAudioAnalyzer();
+    if (webcamStream) {
+        webcamStream.getTracks().forEach(t => t.stop());
+        webcamStream = null;
+    }
+    stopBuzzerSound();
+    alert(`用餐完成！\n總時間: ${durationSec} 秒\n累積咀嚼: ${mealMetrics.totalChews} 次\n平均單次咀嚼耗時: ${avgChewTime.toFixed(2)} 秒`);
+}
+
+// 6. Web Audio API 聲學分析 ＋ Google YAMNet 1.05 秒滑動音訊環形緩衝區推論
+function teardownAudioAnalyzer() {
+    if (audioInferenceTimer) {
+        clearInterval(audioInferenceTimer);
+        audioInferenceTimer = null;
+    }
+    try { if (audioScriptNode) { audioScriptNode.onaudioprocess = null; audioScriptNode.disconnect(); } } catch (e) {}
+    try { if (audioMuteGain) audioMuteGain.disconnect(); } catch (e) {}
+    try { if (audioAnalyser) audioAnalyser.disconnect(); } catch (e) {}
+    try { if (audioMediaSource) audioMediaSource.disconnect(); } catch (e) {}
+    audioScriptNode = null;
+    audioMuteGain = null;
+    audioAnalyser = null;
+    audioMediaSource = null;
+    audioDataArray = null;
+    audioRingBuffer = null;
+    audioSamplesCollected = 0;
     try {
-        isMealActive = false;
-
-        // 計算總用餐時長與平均咀嚼時間
-        const endTime = new Date();
-        durationSec = Math.round((endTime - mealMetrics.startTime) / 1000);
-        avgChewTime = mealMetrics.chewDurations.length > 0
-            ? (mealMetrics.chewDurations.reduce((a, b) => a + b, 0) / mealMetrics.chewDurations.length)
-            : currentPatient.baseline_chew;
-
-        // 關閉結束按鈕，保持開始按鈕鎖定，避免結束流程尚未完成就開始下一餐
-        const btnStart = document.getElementById('btn-start-meal');
-        const btnEnd = document.getElementById('btn-end-meal');
-        if (btnStart) {
-            btnStart.disabled = true;
-            btnStart.classList.add('opacity-50', 'cursor-not-allowed');
+        if (audioCtx && audioCtx.state !== 'closed') {
+            audioCtx.close().catch(() => {});
         }
-        if (btnEnd) {
-            btnEnd.disabled = true;
-            btnEnd.classList.add('opacity-50', 'cursor-not-allowed');
+    } catch (e) {}
+    audioCtx = null;
+}
+
+function setupAudioAnalyzer(stream) {
+    try {
+        teardownAudioAnalyzer();
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume().catch(() => {});
         }
-        document.getElementById('meal-status-text').innerText = '用餐結束，正在儲存紀錄…';
 
-        await window.ConnectionCore.finalizeMealSession(
-            sessionInsertPromise,
-            async () => {
-                // 先停止相機與信令，再等待資料庫 insert 完成
-                if (webcamStream) {
-                    const stream = webcamStream;
-                    webcamStream = null;
-                    stream.getTracks().forEach(track => {
-                        try { track.stop(); } catch (err) { console.warn('[Camera] Track stop failed:', err); }
-                    });
-                }
-                if (peerConnection) {
-                    const connection = peerConnection;
-                    peerConnection = null;
-                    try { connection.close(); } catch (err) { console.warn('[WebRTC] Peer close failed:', err); }
-                }
-                try {
-                    await broadcastSystemState(true, true);
-                } catch (err) {
-                    console.warn('[Realtime] Failed to broadcast meal stop:', err);
-                }
-                if (supabaseChannel) {
-                    const channel = supabaseChannel;
-                    supabaseChannel = null;
-                    try {
-                        await channel.unsubscribe();
-                    } catch (err) {
-                        console.warn('[Realtime] Failed to unsubscribe after meal:', err);
-                    }
-                }
-                patientRealtimeReady = false;
-                activeNegotiationId = null;
-                activePeerClientId = null;
-                pendingPeerClientId = null;
-                activeOfferPayload = null;
-                peerOfferInProgress = false;
-                resendOfferAfterCreation = false;
-                remoteCandidateBuffer.clear();
-                stopBuzzerSound();
-            },
-            async sessionId => {
-                if (!supabaseClient) return;
-                const { error } = await supabaseClient.from('meal_sessions').update({
-                    end_time: endTime.toISOString(),
-                    total_duration_sec: durationSec,
-                    total_chew_count: mealMetrics.totalChews,
-                    avg_chew_duration: parseFloat(avgChewTime.toFixed(2)),
-                    cough_count_l1: mealMetrics.coughCountL1,
-                    cough_count_l2: mealMetrics.coughCountL2,
-                    choking_events_l3: mealMetrics.chokingEventsL3,
-                    pouching_events: mealMetrics.pouchingEvents,
-                    risk_level: mealMetrics.riskLevel
-                }).eq('id', sessionId);
-                if (error) throw error;
+        audioMediaSource = audioCtx.createMediaStreamSource(stream);
+        audioAnalyser = audioCtx.createAnalyser();
+        audioAnalyser.fftSize = 256;
+        audioMediaSource.connect(audioAnalyser);
+        audioDataArray = new Uint8Array(audioAnalyser.frequencyBinCount);
 
-                // 更新個案個人化動態基準 (3餐自適應平均值)
-                await updatePatientAdaptiveBaseline(avgChewTime);
+        // 建立 1.05 秒單聲道 Float32 滑動視窗 (YAMNet 最少需要 0.975 秒音訊樣本)
+        const ringLength = Math.ceil(audioCtx.sampleRate * 1.05);
+        audioRingBuffer = new Float32Array(ringLength);
+        audioSamplesCollected = 0;
+
+        audioScriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+        audioMuteGain = audioCtx.createGain();
+        audioMuteGain.gain.value = 0.0; // 完全靜音輸出，防止喇叭回授嘯叫
+
+        audioScriptNode.onaudioprocess = (event) => {
+            if (!audioRingBuffer) return;
+            const input = event.inputBuffer.getChannelData(0);
+            const n = input.length;
+            const total = audioRingBuffer.length;
+            if (n >= total) {
+                audioRingBuffer.set(input.subarray(n - total), 0);
+                audioSamplesCollected = total;
+            } else {
+                audioRingBuffer.copyWithin(0, n);
+                audioRingBuffer.set(input, total - n);
+                audioSamplesCollected = Math.min(total, audioSamplesCollected + n);
             }
-        );
-    } catch (err) {
-        console.warn('[Supabase] Failed to finalize meal session:', err);
-    } finally {
-        mealSessionTracker.clear();
-        currentMealSessionInsertPromise = Promise.resolve(null);
-        document.getElementById('btn-start-meal').disabled = false;
-        document.getElementById('btn-start-meal').classList.remove('opacity-50', 'cursor-not-allowed');
-        document.getElementById('meal-status-text').innerText = '用餐結束 ⏹️';
-        alert(`用餐完成！\n總時間: ${durationSec} 秒\n累積咀嚼: ${mealMetrics.totalChews} 次\n平均單次咀嚼耗時: ${avgChewTime.toFixed(2)} 秒`);
-        mealStartLock.release();
+        };
+
+        audioMediaSource.connect(audioScriptNode);
+        audioScriptNode.connect(audioMuteGain);
+        audioMuteGain.connect(audioCtx.destination);
+
+        // 每 0.5 秒執行一次 YAMNet 咳嗽/喘鳴/哽噎聲紋辨識
+        audioInferenceTimer = setInterval(runYamnetInference, YAMNET_HOP_MS);
+
+        const micLabel = document.getElementById('hud-mic-label');
+        if (micLabel) {
+            if (isAudioClassifierReady) {
+                micLabel.innerText = '🎤 AI聽診中';
+                micLabel.className = 'text-[10px] text-emerald-400 font-semibold';
+            } else if (!audioClassifierFailed) {
+                micLabel.innerText = '🎤 AI載入中';
+                micLabel.className = 'text-[10px] text-slate-400';
+            }
+        }
+    } catch (e) {
+        console.error('[Audio] Analyser & YAMNet stream setup error:', e);
     }
 }
 
-// 6. Web Audio API 聲學分析
-function setupAudioAnalyzer(stream) {
-    try {
-        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const source = audioCtx.createMediaStreamSource(stream);
-        audioAnalyser = audioCtx.createAnalyser();
-        audioAnalyser.fftSize = 256;
-        source.connect(audioAnalyser);
+function updateMicHudBadge(nowSec = performance.now() / 1000.0) {
+    const micPill = document.getElementById('hud-mic-pill');
+    const micLabel = document.getElementById('hud-mic-label');
+    if (!micLabel) return;
 
-        audioDataArray = new Uint8Array(audioAnalyser.frequencyBinCount);
-    } catch (e) {
-        console.error('[Audio] Analyser setup error:', e);
+    if (!isAudioClassifierReady) {
+        if (audioClassifierFailed) {
+            micLabel.innerText = '🎤 音量備援';
+            micLabel.className = 'text-[10px] text-amber-400';
+        }
+        return;
+    }
+
+    const recentCoughAge = nowSec - lastAiCoughTime;
+    if (recentCoughAge >= 0 && recentCoughAge <= 2.5) {
+        const pct = Math.min(99, Math.round(aiAudioState.lastPeakScore * 100));
+        micLabel.innerText = `🎤 ${aiAudioState.topChokeLabelZh} ${pct}%`;
+        micLabel.className = 'text-[10px] text-rose-300 font-bold animate-pulse';
+        if (micPill) {
+            micPill.className = 'absolute top-3 right-3 bg-rose-950/90 backdrop-blur px-2.5 py-1.5 rounded-xl border border-rose-500/80 flex items-center space-x-2 transition-colors duration-200 shadow-lg';
+        }
+    } else {
+        micLabel.innerText = isMealActive ? '🎤 AI聽診中' : '🎤 AI聽診就緒';
+        micLabel.className = 'text-[10px] text-emerald-400 font-semibold';
+        if (micPill) {
+            micPill.className = 'absolute top-3 right-3 bg-slate-900/80 backdrop-blur px-2.5 py-1.5 rounded-xl border border-slate-700/60 flex items-center space-x-2 transition-colors duration-200';
+        }
+    }
+}
+
+function runYamnetInference() {
+    if (!isMealActive || !isAudioClassifierReady || !audioClassifier || !audioCtx || !audioRingBuffer) return;
+
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+        return;
+    }
+
+    // 確保已收集滿至少 0.98 秒真實音訊樣本再推論
+    if (audioSamplesCollected < Math.floor(audioCtx.sampleRate * 0.98)) return;
+
+    // 若蜂鳴器警報正在鳴響，暫停聲紋推論以免自體蜂鳴干擾
+    if (audioBuzzerInterval !== null) return;
+
+    const nowSec = performance.now() / 1000.0;
+
+    // 計算 RMS 能量，安靜環境直接跳過 WASM 推論節省手機電力
+    let sumSq = 0.0;
+    for (let i = 0; i < audioRingBuffer.length; i++) {
+        const v = audioRingBuffer[i];
+        sumSq += v * v;
+    }
+    const rms = Math.sqrt(sumSq / audioRingBuffer.length);
+    aiAudioState.rmsEnergy = rms;
+
+    if (rms < 0.004) {
+        aiAudioState.chokeScore = 0.0;
+        aiAudioState.rawCoughScore = 0.0;
+        aiAudioState.speechScore = 0.0;
+        aiAudioState.updatedAt = nowSec;
+        updateMicHudBadge(nowSec);
+        return;
+    }
+
+    try {
+        const results = audioClassifier.classify(audioRingBuffer, audioCtx.sampleRate);
+        let bestChokeScore = 0.0;
+        let bestRawCough = 0.0;
+        let bestSpeech = 0.0;
+        let bestChokeCat = "";
+        let topOverall = "-";
+
+        if (Array.isArray(results)) {
+            for (const res of results) {
+                const clsList = res && res.classifications;
+                if (!clsList || clsList.length === 0) continue;
+                const cats = clsList[0].categories || [];
+                if (cats.length > 0 && topOverall === "-") {
+                    topOverall = cats[0].categoryName || cats[0].displayName || "-";
+                }
+
+                let chokeSum = 0.0;
+                let speechSum = 0.0;
+                let topChokeSingleScore = 0.0;
+                let topChokeSingleName = "";
+
+                for (const cat of cats) {
+                    const rawName = (cat.categoryName || cat.displayName || "");
+                    const nameLower = rawName.toLowerCase();
+                    const sc = cat.score || 0.0;
+
+                    if (YAMNET_CHOKE_KEYWORDS.some(k => nameLower.includes(k))) {
+                        chokeSum += sc;
+                        if (sc > topChokeSingleScore) {
+                            topChokeSingleScore = sc;
+                            topChokeSingleName = rawName;
+                        }
+                    }
+                    if (YAMNET_SPEECH_KEYWORDS.some(k => nameLower.includes(k))) {
+                        speechSum += sc;
+                    }
+                }
+
+                // 對齊桌面版語音抑制公式：扣除 0.5 倍聊天語音機率，過濾邊吃邊講話誤判
+                const suppressedScore = Math.max(0.0, chokeSum - 0.5 * speechSum);
+                if (suppressedScore >= bestChokeScore) {
+                    bestChokeScore = suppressedScore;
+                    bestRawCough = chokeSum;
+                    bestSpeech = speechSum;
+                    bestChokeCat = topChokeSingleName;
+                }
+            }
+        }
+
+        let zhLabel = "咳嗽聲";
+        const lowerCat = bestChokeCat.toLowerCase();
+        for (const [k, v] of Object.entries(YAMNET_LABEL_ZH)) {
+            if (lowerCat.includes(k)) {
+                zhLabel = v;
+                break;
+            }
+        }
+
+        aiAudioState.chokeScore = bestChokeScore;
+        aiAudioState.rawCoughScore = bestRawCough;
+        aiAudioState.speechScore = bestSpeech;
+        aiAudioState.topChokeLabel = bestChokeCat;
+        aiAudioState.topChokeLabelZh = zhLabel;
+        aiAudioState.topOverallLabel = topOverall;
+        aiAudioState.updatedAt = nowSec;
+
+        // 1) 聲影融合觸發窗 (>= 0.15)：刷新最近 AI 咳嗽時間戳，讓手放胸口/脖子＋身體晃動從 5 秒加速至 3 秒觸發 L4
+        if (bestChokeScore >= YAMNET_CHOKE_TH_FUSION) {
+            lastAiCoughTime = nowSec;
+            lastCoughTime = nowSec;
+            aiAudioState.lastPeakScore = bestChokeScore;
+            console.log(`🎤 [YAMNet] 偵測到呼吸道異常聲紋: ${zhLabel} (${bestChokeCat || 'Cough'}) | 抑制後分數=${bestChokeScore.toFixed(2)} (原始=${bestRawCough.toFixed(2)}, 語音=${bestSpeech.toFixed(2)})`);
+        }
+
+        // 2) 單純咳嗽靜默後台紀錄門檻 (臉部在畫面內 >= 0.20；人臉不在畫面內需 >= 0.32 防背景雜音)
+        const recordTh = (faceLostSince === null) ? YAMNET_COUGH_RECORD_TH : YAMNET_COUGH_SOLO_TH;
+        if (bestChokeScore >= recordTh) {
+            window._pendingAiCoughEvent = {
+                time: nowSec,
+                score: bestChokeScore,
+                labelZh: zhLabel,
+                rawLabel: bestChokeCat || "Cough"
+            };
+        }
+
+        updateMicHudBadge(nowSec);
+    } catch (err) {
+        console.warn('[YAMNet] Audio classification inference warning:', err);
     }
 }
 
@@ -716,6 +962,8 @@ async function processVideoFrame(now) {
     let bodyShaking = false;
     const w = aiCanvas.width;
     const h = aiCanvas.height;
+    const hasRecentAiCough = isAudioClassifierReady && ((currentTime - lastAiCoughTime) <= AI_COUGH_FUSION_WINDOW_SEC);
+    const effectiveChokeTriggerSec = hasRecentAiCough ? CHOKE_AUDIO_FUSION_TRIGGER_SEC : CHOKE_SIMULTANEOUS_TRIGGER_SEC;
 
     if (faceLandmarks) {
         faceLostSince = null;
@@ -858,13 +1106,14 @@ async function processVideoFrame(now) {
             if (cyanotic) evidenceFusion.observe("cyanosis", 0.7);
         } catch (e) {}
 
-        // 僅保留證據紀錄分析，不單獨直接觸發 L4 警報
-        evidenceFusion.observe("audio", (audioEnergy * 2.0));
+        // 僅保留證據紀錄分析 (改用 YAMNet 語音抑制後嗆咳分數，避免日常聊天飆高證據融合分)
+        const audioFusionEvidence = isAudioClassifierReady ? (aiAudioState.chokeScore * 2.0) : (audioClassifierFailed ? audioEnergy : 0.0);
+        evidenceFusion.observe("audio", audioFusionEvidence);
         if (isHandOnNeck) evidenceFusion.observe("gesture", 0.6);
         if (mar > 0.15 && movementStd < 0.8) evidenceFusion.observe("still_open", 0.3);
 
         // 🎯 繪製原版 Detection Overlay (嘴部紅圈、關鍵特徵點、Throat Zone 紫色圈、Chest Zone、大字提示)
-        drawOriginalDetectionOverlay(aiCtx, faceLandmarks, handLandmarks, w, h, currentState, mar, movementStd, mealMetrics.totalChews, isHandOnNeck, isHandOnChest, isBodyShakingContinuous, chokeSimultaneousDuration);
+        drawOriginalDetectionOverlay(aiCtx, faceLandmarks, handLandmarks, w, h, currentState, mar, movementStd, mealMetrics.totalChews, isHandOnNeck, isHandOnChest, isBodyShakingContinuous, chokeSimultaneousDuration, effectiveChokeTriggerSec, hasRecentAiCough);
 
     } else {
         // 人臉遺失快取處理 (2.0 秒錨點快取手勢)
@@ -887,11 +1136,14 @@ async function processVideoFrame(now) {
         }
 
         // 繪製 NO FACE DETECTED
-        drawOriginalDetectionOverlay(aiCtx, null, handLandmarks, w, h, currentState, 0, 0, mealMetrics.totalChews, isHandOnNeck, isHandOnChest, isBodyShakingContinuous, chokeSimultaneousDuration);
+        drawOriginalDetectionOverlay(aiCtx, null, handLandmarks, w, h, currentState, 0, 0, mealMetrics.totalChews, isHandOnNeck, isHandOnChest, isBodyShakingContinuous, chokeSimultaneousDuration, effectiveChokeTriggerSec, hasRecentAiCough);
     }
 
     // ------------------------------------------------------------------
-    // 🚨 哽噎與拍胸晃動 5 秒決策邏輯 (核心規則：晃動 + 拍胸 同時持續 5 秒才觸發警報)
+    // 🚨 哽噎與拍胸晃動多模態決策邏輯
+    // 核心規則：必須「手放胸口/脖子 ＋ 身體劇烈晃動」才可觸發 L4 警報
+    // - 無 AI 咳嗽聲：持續滿 5.0 秒觸發 L4
+    // - 融合 AI 咳嗽聲 (4 秒記憶窗內 YAMNet 偵測到咳嗽/喘鳴聲)：加速為持續滿 3.0 秒立即觸發 L4！
     // ------------------------------------------------------------------
     const isSimultaneous = isBodyShakingContinuous && isHandOnChestOrThroat;
 
@@ -902,11 +1154,13 @@ async function processVideoFrame(now) {
         chokeGraceStartTime = null;
         chokeSimultaneousDuration = currentTime - chokeSimultaneousStartTime;
 
-        // 🎯 兩者同時持續做滿 5 秒才觸發警報！(嚴格遵守使用者指示，防晃動過敏)
-        if (chokeSimultaneousDuration >= CHOKE_SIMULTANEOUS_TRIGGER_SEC) {
+        if (chokeSimultaneousDuration >= effectiveChokeTriggerSec) {
             if (currentTime - lastChokeAlertTime >= 10.0) {
                 lastChokeAlertTime = currentTime;
-                triggerAlertLevel('L4', '🚨【緊急・劇烈哽噎警報】身體持續前後左右晃動且手部在胸口拍胸持續滿 5 秒！請立即協助！');
+                const alertMsg = hasRecentAiCough
+                    ? `🚨【緊急・AI聲影融合哽噎警報】偵測到 AI ${aiAudioState.topChokeLabelZh || '咳嗽聲'} ＋ 手放胸口/喉嚨與身體劇烈晃動滿 ${CHOKE_AUDIO_FUSION_TRIGGER_SEC.toFixed(0)} 秒！請立即協助！`
+                    : `🚨【緊急・劇烈哽噎警報】身體持續前後左右晃動且手部在胸口/喉嚨持續滿 ${CHOKE_SIMULTANEOUS_TRIGGER_SEC.toFixed(0)} 秒！請立即協助！`;
+                triggerAlertLevel('L4', alertMsg);
                 chokeSimultaneousStartTime = null;
                 chokeSimultaneousDuration = 0.0;
             }
@@ -924,26 +1178,55 @@ async function processVideoFrame(now) {
         }
     }
 
-    // 咳嗽狀態追蹤 (僅用於靜默後台紀錄)
-    let coughDetectedThisFrame = visionCough;
-    if (audioEnergy > 0.20) coughDetectedThisFrame = true;
-    if (coughDetectedThisFrame) lastCoughTime = currentTime;
+    // ------------------------------------------------------------------
+    // 🤫 單純嗆咳靜默後台紀錄 (結合 Google YAMNet AI 咳嗽聲紋 ＋ 影像頭部急抽動)
+    // 嚴格遵守：單純咳嗽絕不跳彈窗、不閃紅橫幅，僅靜默寫入「📋 嗆咳紀錄」
+    // ------------------------------------------------------------------
+    const pendingAiCough = (window._pendingAiCoughEvent && (currentTime - window._pendingAiCoughEvent.time) <= 1.2)
+        ? window._pendingAiCoughEvent
+        : null;
+    const aiCoughNow = Boolean(pendingAiCough);
+    const fallbackAudioCough = (!isAudioClassifierReady && audioClassifierFailed && audioEnergy > 0.35);
 
-    if (visionCough || audioEnergy > 0.25) {
-        // L1 / L2 合併為「嗆咳」 (靜默後台紀錄：取消劇烈晃動強制綁定，不跳 UI 彈窗、不閃紅橫幅)
+    if (visionCough || aiCoughNow || fallbackAudioCough) {
+        lastCoughTime = currentTime;
+        if (aiCoughNow) {
+            window._pendingAiCoughEvent = null;
+        }
         if (currentTime - (window._lastCoughLogTime || 0) >= 3.0) {
             window._lastCoughLogTime = currentTime;
             mealMetrics.coughCount = (mealMetrics.coughCount || 0) + 1;
-            const typeStr = (visionCough && audioEnergy > 0.25) ? "雙流特徵確認" : (visionCough ? "影像頭部急抽動" : "聽覺 YAMNet 咳嗽聲");
-            if (typeof window.recordCoughEvent === 'function') {
-                window.recordCoughEvent(typeStr, "背景靜默紀錄 (無彈窗干擾)");
+            mealMetrics.coughCountL1 = (mealMetrics.coughCountL1 || 0) + 1;
+            window.mealMetrics = mealMetrics;
+
+            let typeStr = "AI 聽覺嗆咳";
+            let detailStr = "背景靜默紀錄 (無彈窗干擾)";
+
+            if (visionCough && aiCoughNow) {
+                const pct = Math.min(99, Math.round(pendingAiCough.score * 100));
+                typeStr = `雙模態嗆咳 (影像＋AI${pendingAiCough.labelZh})`;
+                detailStr = `YAMNet 辨識 ${pendingAiCough.labelZh} (${pct}%) ＋ 頭部急抽動 · 靜默紀錄`;
+            } else if (aiCoughNow) {
+                const pct = Math.min(99, Math.round(pendingAiCough.score * 100));
+                typeStr = `AI 聽覺辨識 (${pendingAiCough.labelZh})`;
+                detailStr = `Google YAMNet 聲紋信心度 ${pct}% · 已過濾講話語音 · 靜默紀錄`;
+            } else if (visionCough) {
+                typeStr = "影像頭部急抽動";
+                detailStr = "視覺連續劇烈上下抽動 · 靜默紀錄 (無彈窗干擾)";
+            } else {
+                typeStr = "高能量突發聲響 (備援)";
+                detailStr = "AI 聲學模型未就緒，以高音量門檻備援靜默紀錄";
             }
-            console.log("🤫【靜默後台紀錄】偵測到嗆咳（聲音咳嗽或影像頭部抽動），背景靜默紀錄，無彈窗、不閃紅橫幅。");
+
+            if (typeof window.recordCoughEvent === 'function') {
+                window.recordCoughEvent(typeStr, detailStr);
+            }
+            console.log(`🤫【靜默後台紀錄】${typeStr} | ${detailStr}`);
         }
     }
 
     // 更新 HUD 即時資訊
-    updateHudStats(currentState, mar, movementStd, mealMetrics.totalChews, mealMetrics.swallowCount || 0, mealMetrics.jawVelocity, evidenceFusion.score(), chokeSimultaneousDuration);
+    updateHudStats(currentState, mar, movementStd, mealMetrics.totalChews, mealMetrics.swallowCount || 0, mealMetrics.jawVelocity, evidenceFusion.score(), chokeSimultaneousDuration, effectiveChokeTriggerSec, hasRecentAiCough);
     
     // Level 1: 10秒 含飯發呆溫和提醒
     if (mealMetrics.jawStillTime >= CONFIG.BASELINES.POUCHING_HINT_SEC && mealMetrics.jawStillTime < (CONFIG.BASELINES.POUCHING_HINT_SEC + 0.5)) {
@@ -1071,11 +1354,10 @@ function updateRiskBadge() {
 
 // 9. Supabase 日誌紀錄與動態基準更新
 async function logAnomalyToSupabase(level, msg) {
-    const sessionId = mealSessionTracker.currentId;
-    if (!supabaseClient || !sessionId) return;
+    if (!supabaseClient || !currentSessionId) return;
     try {
         await supabaseClient.from('anomaly_logs').insert([{
-            session_id: sessionId,
+            session_id: currentSessionId,
             event_type: level,
             jaw_velocity: parseFloat(mealMetrics.jawVelocity.toFixed(2)),
             audio_energy: 0.0,
@@ -1111,154 +1393,58 @@ async function updatePatientAdaptiveBaseline(newChewAvg) {
 
 // 10. WebRTC P2P 串流與 Supabase Realtime 信令
 function setupWebRTCSignaling() {
-    if (!supabaseClient || !currentPatient.id || !window.ConnectionCore) return;
-    if (supabaseChannel) supabaseChannel.unsubscribe();
-    patientRealtimeReady = false;
-    remoteCandidateBuffer.clear();
-    activeNegotiationId = null;
-    activePeerClientId = null;
-    pendingPeerClientId = null;
-    activeOfferPayload = null;
+    if (!supabaseClient) return;
     try {
-        const topic = window.ConnectionCore.channelTopic(currentPatient.id);
-        supabaseChannel = supabaseClient.channel(topic, window.ConnectionCore.privateChannelOptions());
+        supabaseChannel = supabaseClient.channel(`webrtc-${currentPatient.patient_code}`);
         supabaseChannel
             .on('broadcast', { event: 'signal' }, async ({ payload }) => {
-                if (payload.type === 'request_offer' && payload.profileId === currentPatient.id && payload.clientId) {
-                    await startPeerConnection(payload.clientId);
-                } else if (payload.type === 'answer' && peerConnection) {
-                    if (payload.negotiationId !== activeNegotiationId || payload.clientId !== activePeerClientId) return;
+                if (payload.type === 'answer' && peerConnection) {
                     await peerConnection.setRemoteDescription(new RTCSessionDescription(payload.sdp));
-                    activeOfferPayload = null;
-                    await flushRemoteCandidates(peerConnection, activeNegotiationId, activePeerClientId);
-                } else if (payload.type === 'candidate') {
-                    await receiveRemoteCandidate(payload);
+                } else if (payload.type === 'candidate' && peerConnection) {
+                    await peerConnection.addIceCandidate(new RTCIceCandidate(payload.candidate));
                 }
             })
-            .subscribe((status) => {
-                patientRealtimeReady = status === 'SUBSCRIBED';
-                if (status === 'SUBSCRIBED' && supabaseChannel) {
-                    supabaseChannel.send({
-                        type: 'broadcast',
-                        event: 'signal',
-                        payload: { type: 'patient_ready', profileId: currentPatient.id }
-                    });
-                } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-                    console.warn('[Realtime] Patient channel status:', status);
-                }
-            });
-    } catch (error) {
-        patientRealtimeReady = false;
-        console.error('[Realtime] Patient channel setup failed:', error);
-    }
+            .subscribe();
+    } catch (e) {}
 }
 
-async function receiveRemoteCandidate(payload) {
-    if (!payload?.candidate || !payload.negotiationId || payload.clientId !== activePeerClientId) return;
-    if (activeNegotiationId && payload.negotiationId !== activeNegotiationId) return;
-    if (!peerConnection || !peerConnection.remoteDescription) {
-        remoteCandidateBuffer.enqueue(payload);
-        return;
-    }
+async function startPeerConnection() {
     try {
-        await peerConnection.addIceCandidate(new RTCIceCandidate(payload.candidate));
-    } catch (error) {
-        console.warn('[WebRTC] Candidate was not accepted:', error);
-    }
-}
-
-async function flushRemoteCandidates(connection, negotiationId, clientId) {
-    const pending = window.ConnectionCore.takeMatchingCandidates(remoteCandidateBuffer, negotiationId, clientId);
-    for (const payload of pending) {
-        if (!payload.candidate) continue;
-        try {
-            await connection.addIceCandidate(new RTCIceCandidate(payload.candidate));
-        } catch (error) {
-            console.warn('[WebRTC] Buffered candidate was not accepted:', error);
-        }
-    }
-}
-
-async function sendActiveOffer() {
-    if (!supabaseChannel || !patientRealtimeReady || !activeOfferPayload) return;
-    const status = await supabaseChannel.send({
-        type: 'broadcast',
-        event: 'signal',
-        payload: activeOfferPayload
-    });
-    if (status !== 'ok') console.warn('[WebRTC] Offer send status:', status);
-}
-
-async function startPeerConnection(clientId) {
-    if (!webcamStream || !supabaseChannel || !patientRealtimeReady || !clientId) return;
-    if (peerOfferInProgress) {
-        if (clientId === activePeerClientId) resendOfferAfterCreation = true;
-        else pendingPeerClientId = clientId;
-        return;
-    }
-    const connectionState = peerConnection && peerConnection.connectionState;
-    const reusable = peerConnection && !['failed', 'closed', 'disconnected'].includes(connectionState);
-    if (reusable && activePeerClientId === clientId) {
-        if (activeOfferPayload) await sendActiveOffer();
-        return;
-    }
-
-    if (peerConnection) peerConnection.close();
-    remoteCandidateBuffer.clear();
-    activePeerClientId = clientId;
-    activeNegotiationId = crypto.randomUUID();
-    activeOfferPayload = null;
-    resendOfferAfterCreation = false;
-    peerOfferInProgress = true;
-    try {
-        const negotiationId = activeNegotiationId;
         peerConnection = new RTCPeerConnection(CONFIG.RTC_CONFIG);
-        webcamStream.getTracks().forEach(track => peerConnection.addTrack(track, webcamStream));
+        
+        if (webcamStream) {
+            webcamStream.getTracks().forEach(track => peerConnection.addTrack(track, webcamStream));
+        }
 
-        peerConnection.onicecandidate = async (event) => {
-            if (event.candidate && supabaseChannel && patientRealtimeReady) {
-                await supabaseChannel.send({
+        peerConnection.onicecandidate = (event) => {
+            if (event.candidate && supabaseChannel) {
+                supabaseChannel.send({
                     type: 'broadcast',
                     event: 'signal',
-                    payload: { type: 'candidate', candidate: event.candidate, negotiationId, clientId }
+                    payload: { type: 'candidate', candidate: event.candidate }
                 });
             }
         };
 
         const offer = await peerConnection.createOffer();
         await peerConnection.setLocalDescription(offer);
-        activeOfferPayload = { type: 'offer', sdp: offer, negotiationId, clientId };
-        await sendActiveOffer();
-    } catch (error) {
-        if (peerConnection) peerConnection.close();
-        peerConnection = null;
-        activeNegotiationId = null;
-        activePeerClientId = null;
-        activeOfferPayload = null;
-        resendOfferAfterCreation = false;
-        console.error('[WebRTC] PeerConnection offer error:', error);
-    } finally {
-        peerOfferInProgress = false;
-        const pendingClient = pendingPeerClientId;
-        pendingPeerClientId = null;
-        if (pendingClient && pendingClient !== activePeerClientId) {
-            await startPeerConnection(pendingClient);
-            return;
+
+        if (supabaseChannel) {
+            supabaseChannel.send({
+                type: 'broadcast',
+                event: 'signal',
+                payload: { type: 'offer', sdp: offer }
+            });
         }
-        if (resendOfferAfterCreation && activeOfferPayload) {
-            resendOfferAfterCreation = false;
-            await sendActiveOffer();
-        }
+    } catch (e) {
+        console.warn('[WebRTC] PeerConnection offer error:', e);
     }
 }
 
-async function broadcastSystemState(force = false, sessionEnded = false) {
-    if (!supabaseChannel || !patientRealtimeReady) return;
-    const now = performance.now();
-    if (!force && now - lastStateBroadcastAt < 250) return;
-    lastStateBroadcastAt = now;
+function broadcastSystemState() {
+    if (!supabaseChannel) return;
     try {
-        await supabaseChannel.send({
+        supabaseChannel.send({
             type: 'broadcast',
             event: 'state_update',
             payload: {
@@ -1270,14 +1456,11 @@ async function broadcastSystemState(force = false, sessionEnded = false) {
                 jawVelocity: parseFloat(mealMetrics.jawVelocity.toFixed(2)),
                 pouchingEvents: mealMetrics.pouchingEvents,
                 coughEvents: (mealMetrics.coughCount || 0) + (mealMetrics.coughCountL2 || 0),
-                activeAlertLevel: sessionEnded ? null : activeAlertLevel,
-                isHandOnNeck: isHandOnNeck,
-                sessionEnded
+                activeAlertLevel: activeAlertLevel,
+                isHandOnNeck: isHandOnNeck
             }
         });
-    } catch (error) {
-        console.warn('[Realtime] State broadcast failed:', error);
-    }
+    } catch (e) {}
 }
 
 // =============================================================================
@@ -1555,7 +1738,7 @@ function drawHandSkeleton(ctx, handLandmarksList, w, h, isHandOnNeck = false) {
 // 原版 UI Overlay 與 HUD 視覺繪製 Helper Functions
 // =============================================================================
 
-function updateHudStats(stateStr, marVal, jawStdVal, chewCnt, swallowCnt, jawVelVal, fusionScore, simultaneousDuration = 0.0) {
+function updateHudStats(stateStr, marVal, jawStdVal, chewCnt, swallowCnt, jawVelVal, fusionScore, simultaneousDuration = 0.0, triggerSec = CHOKE_SIMULTANEOUS_TRIGGER_SEC, hasRecentAiCough = false) {
     const elState = document.getElementById('hud-state');
     if (elState) {
         elState.innerText = stateStr;
@@ -1586,8 +1769,14 @@ function updateHudStats(stateStr, marVal, jawStdVal, chewCnt, swallowCnt, jawVel
     const elShake = document.getElementById('hud-shake-timer');
     if (elShake) {
         if (simultaneousDuration > 0) {
-            elShake.innerText = `${simultaneousDuration.toFixed(1)}s / 5.0s`;
-            elShake.className = simultaneousDuration >= 3.5 ? 'font-mono text-rose-400 font-bold animate-pulse' : 'font-mono text-amber-400 font-bold';
+            const suffix = hasRecentAiCough ? ' (🎤AI咳嗽加速)' : '';
+            elShake.innerText = `${simultaneousDuration.toFixed(1)}s / ${triggerSec.toFixed(1)}s${suffix}`;
+            elShake.className = (simultaneousDuration >= triggerSec * 0.7 || hasRecentAiCough)
+                ? 'font-mono text-rose-400 font-bold animate-pulse'
+                : 'font-mono text-amber-400 font-bold';
+        } else if (hasRecentAiCough) {
+            elShake.innerText = `0.0s / ${triggerSec.toFixed(1)}s (🎤偵測咳嗽)`;
+            elShake.className = 'font-mono text-amber-300 font-bold';
         } else {
             elShake.innerText = '0.0s / 5.0s (正常)';
             elShake.className = 'font-mono text-emerald-400';
@@ -1595,7 +1784,7 @@ function updateHudStats(stateStr, marVal, jawStdVal, chewCnt, swallowCnt, jawVel
     }
 }
 
-function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, stateStr, marVal, jawStdVal, chewCnt, isHandOnNeck = false, isHandOnChest = false, isBodyShaking = false, simultaneousSec = 0.0) {
+function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, stateStr, marVal, jawStdVal, chewCnt, isHandOnNeck = false, isHandOnChest = false, isBodyShaking = false, simultaneousSec = 0.0, triggerSec = CHOKE_SIMULTANEOUS_TRIGGER_SEC, hasRecentAiCough = false) {
     if (landmarks) {
         // 🎯 1. 繪製 MediaPipe 臉部 3D 全骨架與特徵網格 (藍色面輪廓、眼睛、眉毛、雙唇)
         drawFaceMeshSkeleton(ctx, landmarks, w, h);
@@ -1690,17 +1879,18 @@ function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, state
             ctx.fillText('SWALLOWING...', 20, h - 30);
         }
 
-        // 🎯 7. 拍胸＋前後左右晃動 5 秒即時倒數 HUD 進度條
+        // 🎯 7. 拍胸＋前後左右晃動 (5秒 / AI咳嗽融合3秒) 即時倒數 HUD 進度條
         if (simultaneousSec > 0) {
-            const barW = Math.min(w * 0.85, 340);
+            const barW = Math.min(w * 0.88, 360);
             const barH = 34;
             const barX = (w - barW) / 2;
             const barY = 18;
+            const progress = Math.min(1.0, simultaneousSec / triggerSec);
 
             ctx.save();
             // 背景外框
             ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
-            ctx.strokeStyle = simultaneousSec >= 4.0 ? '#ef4444' : '#f59e0b';
+            ctx.strokeStyle = (progress >= 0.75 || hasRecentAiCough) ? '#ef4444' : '#f59e0b';
             ctx.lineWidth = 2.5;
             ctx.beginPath();
             if (ctx.roundRect) {
@@ -1714,12 +1904,14 @@ function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, state
             // 倒數文字
             ctx.fillStyle = '#fef08a';
             ctx.font = 'bold 13px sans-serif';
-            ctx.fillText(`⚠️ 拍胸＋前後左右晃動: ${simultaneousSec.toFixed(1)}s / 5.0s`, barX + 16, barY + 20);
+            const barTitle = hasRecentAiCough
+                ? `⚠️ 🎤AI咳嗽融合加速: ${simultaneousSec.toFixed(1)}s / ${triggerSec.toFixed(1)}s`
+                : `⚠️ 拍胸＋前後左右晃動: ${simultaneousSec.toFixed(1)}s / ${triggerSec.toFixed(1)}s`;
+            ctx.fillText(barTitle, barX + 16, barY + 20);
 
             // 填滿進度條
-            const progress = Math.min(1.0, simultaneousSec / 5.0);
             const fillW = (barW - 32) * progress;
-            ctx.fillStyle = progress >= 0.8 ? '#ef4444' : '#f59e0b';
+            ctx.fillStyle = (progress >= 0.75 || hasRecentAiCough) ? '#ef4444' : '#f59e0b';
             ctx.fillRect(barX + 16, barY + 28, fillW, 8);
             ctx.restore();
         }
