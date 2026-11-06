@@ -15,7 +15,7 @@
 <body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col">
 
     <!-- Header 導覽條 -->
-    <header class="bg-slate-900 border-b border-slate-800 px-6 py-3.5 flex items-center justify-between">
+    <header class="bg-slate-900 border-b border-slate-800 px-6 py-3.5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div class="flex items-center space-x-3">
             <span class="text-3xl">🖥️</span>
             <div>
@@ -24,17 +24,22 @@
             </div>
         </div>
         
-        <div class="flex items-center space-x-4">
+        <div class="flex flex-wrap items-center gap-2">
             <div class="flex items-center space-x-2 bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-700">
                 <span class="w-2.5 h-2.5 rounded-full bg-slate-500" id="rt-status-dot"></span>
                 <span class="text-xs font-semibold text-slate-300" id="rt-status-text">尚未登入</span>
             </div>
-            <div class="flex items-center space-x-2">
-                <label class="sr-only" for="caregiver-patient-code">個案代碼</label>
-                <input id="caregiver-patient-code" value="P001" maxlength="32" placeholder="個案代碼"
-                    class="w-24 rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-100">
-                <button id="btn-connect-patient" type="button" onclick="connectToPatient()"
-                    class="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-xl font-bold">連線個案</button>
+            <div class="flex flex-wrap items-center gap-2">
+                <label class="sr-only" for="caregiver-patient-select">選擇監看個案</label>
+                <select id="caregiver-patient-select" disabled
+                    class="w-44 max-w-[38vw] rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-100">
+                    <option value="">載入個案名單…</option>
+                </select>
+                <button id="btn-refresh-patients" type="button" aria-label="更新個案名單"
+                    class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1.5 rounded-xl border border-slate-700">更新名單</button>
+                <button id="btn-connect-patient" type="button" disabled
+                    class="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-xl font-bold disabled:opacity-50">切換個案</button>
+                <span id="caregiver-patient-list-status" class="sr-only" aria-live="polite"></span>
             </div>
             
             <button onclick="toggleAudioMute()" id="btn-toggle-sound" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-xl border border-slate-700 flex items-center space-x-1 transition">
@@ -66,11 +71,11 @@
                 <div class="absolute top-4 left-4 bg-slate-900/80 backdrop-blur px-4 py-2 rounded-2xl border border-slate-700/60 text-xs space-y-1 z-20">
                     <div class="flex items-center space-x-2">
                         <span class="text-slate-400">當前監看個案:</span>
-                        <span id="caregiver-patient-name" class="font-bold text-blue-400">王爺爺 (P001)</span>
+                        <span id="caregiver-patient-name" class="font-bold text-blue-400">尚未選擇個案</span>
                     </div>
                     <div class="flex items-center space-x-2">
                         <span class="text-slate-400">當前餐食質地:</span>
-                        <span id="caregiver-diet-type" class="font-bold text-emerald-400">軟食餐盒</span>
+                        <span id="caregiver-diet-type" class="font-bold text-emerald-400">-</span>
                     </div>
                 </div>
 
@@ -81,30 +86,10 @@
                 </div>
             </div>
 
-            <!-- 即時數據卡片網格 -->
-            <div class="grid grid-cols-5 gap-2.5">
+            <!-- 即時數據：僅保留咳嗽事件卡片 -->
+            <div class="grid grid-cols-1 gap-2.5">
                 <div class="bg-slate-900 border border-slate-800 p-3 rounded-2xl">
-                    <span class="text-[10px] text-slate-400 block">累積咀嚼數</span>
-                    <span id="stat-chews" class="text-xl font-black font-mono text-emerald-400">0</span>
-                    <span class="text-[9px] text-slate-500 block">次</span>
-                </div>
-                <div class="bg-slate-900 border border-slate-800 p-3 rounded-2xl">
-                    <span class="text-[10px] text-slate-400 block">成功吞嚥</span>
-                    <span id="stat-swallows" class="text-xl font-black font-mono text-blue-400">0</span>
-                    <span class="text-[9px] text-slate-500 block">次</span>
-                </div>
-                <div class="bg-slate-900 border border-slate-800 p-3 rounded-2xl">
-                    <span class="text-[10px] text-slate-400 block">下巴速度</span>
-                    <span id="stat-jaw-vel" class="text-xl font-black font-mono text-purple-400">0.00</span>
-                    <span class="text-[9px] text-slate-500 block">Vel</span>
-                </div>
-                <div class="bg-slate-900 border border-slate-800 p-3 rounded-2xl">
-                    <span class="text-[10px] text-slate-400 block">發呆超時</span>
-                    <span id="stat-pouching" class="text-xl font-black font-mono text-amber-400">0</span>
-                    <span class="text-[9px] text-slate-500 block">次</span>
-                </div>
-                <div class="bg-slate-900 border border-slate-800 p-3 rounded-2xl">
-                    <span class="text-[10px] text-slate-400 block">嗆咳事件</span>
+                    <span class="text-[10px] text-slate-400 block">咳嗽事件</span>
                     <span id="stat-coughs" class="text-xl font-black font-mono text-rose-400">0</span>
                     <span class="text-[9px] text-slate-500 block">次</span>
                 </div>
@@ -159,15 +144,24 @@
 
         <!-- 底部全寬區塊：歷史用餐場次與趨勢圖表 (佔 12 欄) -->
         <section class="lg:col-span-12 bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
-            <h3 class="font-bold text-lg text-slate-100 flex items-center space-x-2">
-                <span>📈</span>
-                <span>個案歷史用餐品質與嗆咳趨勢分析</span>
-            </h3>
+            <div class="flex flex-wrap items-center justify-between gap-3">
+                <h3 class="font-bold text-lg text-slate-100 flex items-center space-x-2">
+                    <span>📈</span>
+                    <span>每餐紀錄與個案趨勢</span>
+                </h3>
+                <label class="flex items-center gap-2 text-xs text-slate-300" for="caregiver-history-range">
+                    歷史範圍
+                    <select id="caregiver-history-range" disabled class="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100">
+                        <option value="recent7">最近 7 餐</option>
+                        <option value="30days">近 30 天</option>
+                    </select>
+                </label>
+            </div>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <!-- 嗆咳與發呆次數統計圖表 -->
+            <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
+                <!-- 咳嗽、分級警報與畫面遮蔽事件統計 -->
                 <div class="bg-slate-950 p-4 rounded-2xl border border-slate-800">
-                    <h4 class="text-xs font-semibold text-slate-400 mb-3">近7次用餐異常事件頻率</h4>
+                    <h4 class="text-xs font-semibold text-slate-400 mb-3">咳嗽與警報事件（分類分開）</h4>
                     <div class="h-48 relative">
                         <canvas id="chart-anomalies"></canvas>
                     </div>
@@ -175,20 +169,32 @@
 
                 <!-- 咀嚼速度趨勢圖表 -->
                 <div class="bg-slate-950 p-4 rounded-2xl border border-slate-800">
-                    <h4 class="text-xs font-semibold text-slate-400 mb-3">平均咀嚼耗時變化趨勢 (與基線對比)</h4>
+                    <h4 class="text-xs font-semibold text-slate-400 mb-3">每餐平均咀嚼時間（對照個案基準）</h4>
                     <div class="h-48 relative">
                         <canvas id="chart-chew-trend"></canvas>
                     </div>
                 </div>
+                <!-- 吞嚥停頓趨勢 -->
+                <div class="bg-slate-950 p-4 rounded-2xl border border-slate-800">
+                    <h4 class="text-xs font-semibold text-slate-400 mb-3">每餐平均吞嚥停頓（對照個案基準）</h4>
+                    <div class="h-48 relative">
+                        <canvas id="chart-swallow-trend"></canvas>
+                    </div>
+                </div>
+            </div>
+
+            <div class="space-y-2">
+                <p id="meal-history-status" class="text-xs text-slate-400" aria-live="polite">等待用餐紀錄…</p>
+                <div id="meal-history-list" class="space-y-2" aria-live="polite"></div>
             </div>
         </section>
 
     </main>
 
     <!-- 腳本引用 -->
-    <script src="config.js?v=20261104_2cae6fc"></script>
-    <script src="connection-core.js?v=20261104_2cae6fc"></script>
-    <script src="auth-ui.js?v=20261104_2cae6fc"></script>
-    <script src="caregiver.js?v=20261104_2cae6fc"></script>
+    <script src="config.js?v=20261106_af38a52"></script>
+    <script src="connection-core.js?v=20261106_af38a52"></script>
+    <script src="auth-ui.js?v=20261106_af38a52"></script>
+    <script src="caregiver.js?v=20261106_af38a52"></script>
 </body>
 </html>

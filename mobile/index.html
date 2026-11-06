@@ -19,6 +19,13 @@
         window.FaceLandmarker = vision.FaceLandmarker;
         window.HandLandmarker = vision.HandLandmarker;
     </script>
+    <!-- MediaPipe Tasks Audio CDN (Google YAMNet AI 咳嗽聲辨識模型) -->
+    <script type="module">
+        import * as audioTasks from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.0";
+        window.tasksAudio = audioTasks;
+        window.AudioFilesetResolver = audioTasks.FilesetResolver;
+        window.AudioClassifier = audioTasks.AudioClassifier;
+    </script>
     <link rel="stylesheet" href="style.css">
     <!-- 🛡️ 全域優先同步定義 (不依賴任何外部檔案載入時序，開箱即用) -->
     <script>
@@ -279,10 +286,10 @@
         window.updateCoughBadge = updateCoughBadge;
     </script>
     <!-- 核心設定與應用腳本引用 (置於 Head 提前解析) -->
-    <script src="config.js?v=20261104_2cae6fc"></script>
-    <script src="connection-core.js?v=20261104_2cae6fc"></script>
-    <script src="auth-ui.js?v=20261104_2cae6fc"></script>
-    <script src="app.js?v=20261104_2cae6fc"></script>
+    <script src="config.js?v=20261106_af38a52"></script>
+    <script src="connection-core.js?v=20261106_af38a52"></script>
+    <script src="auth-ui.js?v=20261106_af38a52"></script>
+    <script src="app.js?v=20261106_af38a52"></script>
 </head>
 <body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col justify-between select-none">
 
@@ -311,22 +318,6 @@
 
     <!-- 主要相機與 AI 監測內容區 -->
     <main class="flex-1 max-w-md w-full mx-auto p-4 flex flex-col justify-center space-y-4">
-
-        <!-- 質地選擇卡片 -->
-        <div class="bg-slate-900 border border-slate-800 rounded-2xl p-3 shadow-lg">
-            <label class="text-xs font-semibold text-slate-400 block mb-2">🍽️ 請選擇本次用餐質地：</label>
-            <div class="grid grid-cols-3 gap-2">
-                <button onclick="selectDiet('regular')" id="btn-diet-regular" class="diet-btn bg-blue-600 text-white font-bold py-2 rounded-xl text-xs shadow border border-blue-400 transition">
-                    普通餐食<br><span class="text-[10px] opacity-80">(需咬10-20下)</span>
-                </button>
-                <button onclick="selectDiet('soft')" id="btn-diet-soft" class="diet-btn bg-slate-800 text-slate-300 font-semibold py-2 rounded-xl text-xs hover:bg-slate-700 border border-slate-700 transition">
-                    軟食餐盒<br><span class="text-[10px] opacity-80">(需咬16-18下)</span>
-                </button>
-                <button onclick="selectDiet('pureed')" id="btn-diet-pureed" class="diet-btn bg-slate-800 text-slate-300 font-semibold py-2 rounded-xl text-xs hover:bg-slate-700 border border-slate-700 transition">
-                    碎食餐<br><span class="text-[10px] opacity-80">(需咬3-10下)</span>
-                </button>
-            </div>
-        </div>
 
         <!-- AI 相機 Viewport 與 Canvas 繪圖面板 -->
         <div id="camera-container" class="relative w-full aspect-[3/4] sm:aspect-[4/3] bg-black rounded-2xl overflow-hidden border-2 border-slate-800 shadow-2xl transition-all duration-300">
@@ -387,7 +378,7 @@
                 </div>
                 <div class="flex items-center space-x-2">
                     <span class="text-slate-400">拍胸＋晃動:</span>
-                    <span id="hud-shake-timer" class="font-mono text-emerald-400 font-bold">0.0s / 5.0s</span>
+                    <span id="hud-shake-timer" class="font-mono text-emerald-400 font-bold">0.0s / 3.0s</span>
                 </div>
             </div>
 
@@ -397,9 +388,9 @@
                 <span id="hud-action-state" class="font-bold text-xs text-slate-200">👄 準備用餐中...</span>
             </div>
 
-            <!-- 右上角 聲音波形 HUD -->
-            <div class="absolute top-3 right-3 bg-slate-900/80 backdrop-blur px-2.5 py-1.5 rounded-xl border border-slate-700/60 flex items-center space-x-2">
-                <span class="text-[10px] text-slate-400">🎤 聲音</span>
+            <!-- 右上角 聲音波形與 AI 咳嗽聽診狀態 HUD -->
+            <div id="hud-mic-pill" class="absolute top-3 right-3 bg-slate-900/80 backdrop-blur px-2.5 py-1.5 rounded-xl border border-slate-700/60 flex items-center space-x-2 transition-colors duration-200">
+                <span id="hud-mic-label" class="text-[10px] text-slate-400">🎤 AI載入中</span>
                 <div class="w-12 h-2 bg-slate-800 rounded-full overflow-hidden">
                     <div id="hud-mic-bar" class="h-full bg-blue-500 w-0 transition-all duration-75"></div>
                 </div>
@@ -409,7 +400,7 @@
             <div id="alert-overlay" class="absolute inset-0 hidden flex flex-col items-center justify-center bg-rose-600/90 backdrop-blur-md p-6 text-center z-30 animate-pulse">
                 <span class="text-6xl mb-2 animate-bounce">🚨</span>
                 <h2 id="alert-title" class="text-2xl font-black text-white tracking-wider mb-2">L4 急性哽噎緊急警報</h2>
-                <p id="alert-desc" class="text-sm text-rose-100 mb-6">偵測到手部拍胸/撫胸與身體連續晃動達 5 秒，已即時通知遠端照護員！</p>
+                <p id="alert-desc" class="text-sm text-rose-100 mb-6">偵測到急性哽噎高危徵象（拍胸／抓喉＋掙扎、雙手窒息手勢或嗆咳後抓喉），已即時通知遠端照護員！</p>
                 <button onclick="dismissAlertOverlay()" class="bg-white text-rose-900 font-bold px-6 py-2.5 rounded-xl shadow-lg hover:bg-slate-100 transition">
                     解除警報 ✕
                 </button>

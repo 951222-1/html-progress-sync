@@ -2,9 +2,11 @@ const test = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const path = require('node:path');
+const vm = require('node:vm');
 
 const root = path.join(__dirname, '..');
 const read = (p) => fs.readFileSync(path.join(root, p), 'utf8');
+const ConnectionCore = require(path.join(root, 'mobile', 'connection-core.js'));
 const patientPage = read('mobile/index.html');
 const caregiverPage = read('mobile/caregiver.html');
 const patientJs = read('mobile/app.js');
@@ -21,6 +23,11 @@ test('browser config uses the project publishable key and contains no privileged
   assert.equal(/https:\/\/shcnvdnhrfmxfywzwtpm\.supabase\.co/.test(config), true, 'project URL missing');
   assert.equal(/SUPABASE_PUBLISHABLE_KEY:\s*"sb_publishable_[A-Za-z0-9_-]+"/.test(config), true, 'publishable key missing');
   assert.equal(/SUPABASE_SERVICE_ROLE|sb_secret_|service_role|xyzcompany/.test(config), false, 'privileged or placeholder key found');
+});
+
+test('L3 alert title does not mislabel face-visibility warnings as low-chew alerts', () => {
+  assert.match(patientJs, /L3 需注意警示/);
+  assert.equal(/L3 吞嚥前少咀嚼預警/.test(patientJs), false);
 });
 
 test('patient and caregiver scripts use one release-specific cache-bust version', () => {
@@ -46,6 +53,320 @@ test('patient endpoint answers caregiver offer requests with a WebRTC offer', ()
   assert.match(patientJs, /request_offer/);
   assert.match(patientJs, /await startPeerConnection\(payload\.clientId\)/);
   assert.match(patientJs, /\.subscribe\(\s*\(status\)/);
+});
+
+test('online body-shake detector uses deadbanded extremum reversal counting', () => {
+  const startAt = patientJs.indexOf('function checkContinuousBodyShaking(');
+  const endAt = patientJs.indexOf('function handNearThroat(', startAt);
+  const detector = patientJs.slice(startAt, endAt);
+  assert.match(detector, /ConnectionCore\.countDirectionReversals/);
+  assert.doesNotMatch(detector, /dx\s*\*\s*prevDx/);
+});
+
+test('face loss expires stale L4 motion/gesture evidence and clears old trajectory samples', () => {
+  const frameStart = patientJs.indexOf('async function processVideoFrame(');
+  const frameEnd = patientJs.indexOf('// 8. 警報觸發', frameStart);
+  const frameFunction = patientJs.slice(frameStart, frameEnd);
+  const noFaceStart = frameFunction.indexOf('} else {', frameFunction.indexOf('if (faceLandmarks)'));
+  const noFaceBranch = frameFunction.slice(noFaceStart);
+  assert.match(noFaceBranch, /isBodyShakingContinuous = false/);
+  assert.match(noFaceBranch, /isHandOnChest = false/);
+  assert.match(noFaceBranch, /isHandOnChestOrThroat = isHandOnNeck/);
+  assert.match(noFaceBranch, /bodyMotionHistory = \[\]/);
+});
+
+test('face loss during a recent L4 candidate raises an unconfirmed visibility warning', () => {
+  assert.match(patientJs, /createFaceLossWarningGuard/);
+  assert.match(patientJs, /chokeFaceLossWarningGuard\.update\(false,\s*l4CandidateAtFaceLoss,\s*currentTime\)/);
+  assert.match(patientJs, /showChokeVisibilityWarning\(/);
+  assert.match(patientJs, /countAsChoking: update\.countAsChoking/);
+  assert.match(patientJs, /eventType: update\.eventType/);
+  assert.match(patientJs, /level === 'L3' && options\.countAsChoking !== false/);
+});
+
+test('unconfirmed face-loss warning is broadcast to caregiver with its specific message', () => {
+  assert.match(patientJs, /activeAlertMessage: sessionEnded \? null : activeAlertMessage/);
+  assert.match(patientJs, /activeAlertMessage = msg/);
+  assert.match(caregiverJs, /state\.activeAlertMessage/);
+  assert.match(caregiverJs, /showCaregiverAlert\(state\.activeAlertLevel,\s*alertMessage/);
+});
+
+test('caregiver displays and logs the supplemental visibility message without downgrading severity', () => {
+  const startAt = caregiverJs.indexOf('function handleStateUpdate(state) {');
+  const endAt = caregiverJs.indexOf('function showCaregiverAlert(', startAt);
+  assert.ok(startAt >= 0 && endAt > startAt, 'handleStateUpdate source must be found');
+  const source = caregiverJs.slice(startAt, endAt) + '\nglobalThis.testHandleStateUpdate = handleStateUpdate;';
+  const nodes = new Map();
+  const displays = [];
+  const logs = [];
+  const context = {
+    document: { getElementById(id) {
+      if (!nodes.has(id)) nodes.set(id, { innerText: '' });
+      return nodes.get(id);
+    } },
+    CONFIG: { DIET_PROFILES: {} },
+    lastLoggedAlertLevel: null,
+    lastLoggedAlertMessage: null,
+    showCaregiverAlert: (level, message) => displays.push({ level, message }),
+    addRealtimeLog: (level, message) => logs.push({ level, message }),
+    hideCaregiverAlert() {},
+    setRealtimeStatus() {}
+  };
+  vm.runInNewContext(source, context);
+  const primary = {
+    patientCode: 'P001', patientName: 'Test patient', dietType: 'soft',
+    totalChews: 0, totalSwallows: 0, jawVelocity: 0, pouchingEvents: 0, coughEvents: 0,
+    activeAlertLevel: 'L2', activeAlertMessage: 'Existing high alert', sessionEnded: false
+  };
+  const supplemented = {
+    ...primary,
+    activeAlertMessage: 'Existing high alert\\n\\nVisibility unclear; please check the patient.'
+  };
+  context.testHandleStateUpdate(primary);
+  context.testHandleStateUpdate(supplemented);
+  context.testHandleStateUpdate(supplemented);
+  assert.equal(displays[1].level, 'L2');
+  assert.match(displays[1].message, /Visibility unclear/);
+  assert.equal(logs.length, 2, 'the changed message should log once, not on every Realtime update');
+  assert.match(logs[1].message, /Visibility unclear/);
+});
+
+test('visibility warning preserves higher alerts and appends context without duplicate metrics', () => {
+  assert.match(patientJs, /ConnectionCore\.resolveVisibilityAlert\(\s*activeAlertLevel/);
+  assert.match(patientJs, /if \(update\.replacePrimary\)/);
+  assert.match(patientJs, /activeAlertBaseMessage = update\.baseMessage/);
+  assert.match(patientJs, /activeAlertMessage = update\.message/);
+  assert.match(patientJs, /logAnomalyToSupabase\(update\.eventType, msg\)/);
+  assert.match(patientJs, /canReplaceAlertLevel\(activeAlertLevel,\s*level\)/);
+  assert.match(caregiverJs, /lastLoggedAlertMessage/);
+});
+
+test('anomaly logger waits for the active meal insert before attaching an event', async () => {
+  const startAt = patientJs.indexOf('async function logAnomalyToSupabase(');
+  const endAt = patientJs.indexOf('\nasync function updatePatientAdaptiveBaseline(', startAt);
+  assert.ok(startAt >= 0 && endAt > startAt, 'anomaly logger source must be found');
+  const source = patientJs.slice(startAt, endAt) + '\nglobalThis.testLogAnomaly = logAnomalyToSupabase;';
+  let resolveSession;
+  const pendingSession = new Promise(resolve => { resolveSession = resolve; });
+  const inserts = [];
+  const context = {
+    mealSessionTracker: { currentId: null },
+    currentMealSessionInsertPromise: pendingSession,
+    isMealActive: true,
+    supabaseClient: { from(table) {
+      assert.equal(table, 'anomaly_logs');
+      return { insert: async rows => { inserts.push(rows[0]); return { error: null }; } };
+    } },
+    mealMetrics: { jawVelocity: 3.25 },
+    isHandOnNeck: false,
+    console
+  };
+  vm.runInNewContext(source, context);
+  const write = context.testLogAnomaly('COUGH', '雙流事件');
+  context.mealMetrics.jawVelocity = 9.9;
+  context.isHandOnNeck = true;
+  resolveSession('meal-current');
+  context.mealSessionTracker.currentId = 'meal-current';
+  await write;
+  assert.equal(inserts.length, 1);
+  assert.equal(inserts[0].session_id, 'meal-current');
+  assert.equal(inserts[0].event_type, 'COUGH');
+  assert.equal(inserts[0].jaw_velocity, 3.25);
+  assert.equal(inserts[0].hands_on_neck, false);
+});
+
+test('patient meal records per-swallow pauses and marks the new event schema version', () => {
+  assert.match(patientJs, /createSwallowPauseTracker\(\)/);
+  assert.match(patientJs, /swallowPauseTracker\.record\(currentTime - stateStartTime\)/);
+  assert.match(patientJs, /avg_swallow_pause:\s*swallowPauseTracker\.snapshot\(\)\.average/);
+  assert.match(patientJs, /event_schema_version:\s*2/);
+});
+
+test('generic face-loss alert is recorded as non-confirmed visibility, not L3 choking', () => {
+  const startAt = patientJs.indexOf('async function processVideoFrame(');
+  const endAt = patientJs.indexOf('// 8. 警報觸發', startAt);
+  const frame = patientJs.slice(startAt, endAt);
+  assert.match(frame, /showChokeVisibilityWarning\(lostMsg,\s*'VISIBILITY_LOSS'\)/);
+  assert.match(frame, /!faceLossVisibilityLogged/);
+});
+
+test('cough, L1, visibility, and L4 events stay separate from confirmed-choke counters', () => {
+  assert.match(patientJs, /logAnomalyToSupabase\('COUGH',\s*typeStr\)/);
+  assert.match(patientJs, /logAnomalyToSupabase\('L1',\s*msg\)/);
+  const triggerStart = patientJs.indexOf('function triggerAlertLevel(');
+  const triggerEnd = patientJs.indexOf('function speakVoicePrompt(', triggerStart);
+  const trigger = patientJs.slice(triggerStart, triggerEnd);
+  assert.doesNotMatch(trigger, /if \(level === 'L4'\) mealMetrics\.coughCountL2\+\+/);
+  assert.match(trigger, /options\.countAsChoking !== false/);
+});
+
+test('caregiver charts separate alert events and use the selected patient baselines', () => {
+  const startAt = caregiverJs.indexOf('function updateCharts(sessions = []) {');
+  const endAt = caregiverJs.indexOf('// 5. WebRTC', startAt);
+  assert.ok(startAt >= 0 && endAt > startAt, 'chart update source must be found');
+  const source = caregiverJs.slice(startAt, endAt) + '\nglobalThis.testUpdateCharts = updateCharts;';
+  const makeChart = datasetCount => ({
+    data: { labels: [], datasets: Array.from({ length: datasetCount }, () => ({ data: [] })) },
+    update() {}
+  });
+  const context = {
+    anomaliesChart: makeChart(6),
+    chewTrendChart: makeChart(2),
+    swallowTrendChart: makeChart(2),
+    currentPatientBaselines: { chew: 0.72, swallow: 1.25 }
+  };
+  vm.runInNewContext(source, context);
+  context.testUpdateCharts([
+    { start_time: '2026-11-05T10:00:00Z', avg_chew_duration: 0.65, avg_swallow_pause: 0.9,
+      alertBreakdownAvailable: true,
+      eventCounts: { cough: 1, l1: 2, l2: 0, l3: 0, l4: 1, visibility: 1 } },
+    { start_time: '2026-11-04T10:00:00Z', avg_chew_duration: 0.8, avg_swallow_pause: null,
+      alertBreakdownAvailable: false, eventCounts: null }
+  ]);
+  assert.deepEqual(context.anomaliesChart.data.datasets.map(dataset => dataset.data[0]), [1, 2, 0, 0, 1, 1]);
+  assert.equal(context.anomaliesChart.data.datasets[0].data[1], null);
+  assert.equal(context.chewTrendChart.data.datasets[1].data[0], 0.72);
+  assert.equal(context.swallowTrendChart.data.datasets[0].data[0], 0.9);
+  assert.equal(context.swallowTrendChart.data.datasets[1].data[0], 1.25);
+});
+
+test('meal history renders separate alert counts, legacy warning and event details as text', () => {
+  const startAt = caregiverJs.indexOf('function renderMealHistory(');
+  const endAt = caregiverJs.indexOf('// 4. Chart.js', startAt);
+  assert.ok(startAt >= 0 && endAt > startAt, 'meal history renderer source must be found');
+  const source = caregiverJs.slice(startAt, endAt) + '\nglobalThis.testRenderMealHistory = renderMealHistory;';
+  const container = { children: [], replaceChildren() { this.children = []; }, appendChild(node) { this.children.push(node); } };
+  const makeNode = tag => ({ tag, children: [], textContent: '', appendChild(node) { this.children.push(node); } });
+  const context = {
+    document: {
+      getElementById: id => id === 'meal-history-list' ? container : null,
+      createElement: makeNode
+    },
+    CONFIG: { DIET_PROFILES: { soft: { name: '軟食' } } }
+  };
+  vm.runInNewContext(source, context);
+  context.testRenderMealHistory([
+    { id: 'old', event_schema_version: 1, start_time: '2026-11-04T10:00:00Z', diet_type: 'soft',
+      total_duration_sec: 600, total_chew_count: 15, avg_chew_duration: 0.8, avg_swallow_pause: null,
+      risk_level: 'NORMAL', alertBreakdownAvailable: false, eventCounts: null, events: [] },
+    { id: 'new', event_schema_version: 2, start_time: '2026-11-05T10:00:00Z', diet_type: 'soft',
+      total_duration_sec: 540, total_chew_count: 14.5, avg_chew_duration: 0.65, avg_swallow_pause: 0.9,
+      risk_level: 'HIGH_RISK', alertBreakdownAvailable: true,
+      eventCounts: { cough: 1, l1: 0, l2: 0, l3: 0, l4: 1, visibility: 1 },
+      events: [{ event_type: 'L3_VISIBILITY', triggered_at: '2026-11-05T10:01:00Z', details: '<img src=x onerror=alert(1)>' }] }
+  ], 'recent7');
+  const flatten = node => [node.textContent, ...(node.children || []).map(flatten)].join(' ');
+  const rendered = container.children.map(flatten).join(' ');
+  assert.equal(container.children.length, 2);
+  assert.match(rendered, /舊資料：警報分級無法拆分/);
+  assert.match(rendered, /一般咳嗽 1/);
+  assert.match(rendered, /L4 1/);
+  assert.match(rendered, /畫面遮蔽 1/);
+  assert.match(rendered, /<img src=x onerror=alert\(1\)>/);
+});
+
+test('history loader fetches per-meal anomaly events and preserves legacy breakdown warnings', async () => {
+  const startAt = caregiverJs.indexOf('async function fetchHistoricalSessions(');
+  const endAt = caregiverJs.indexOf('\nfunction setMealHistoryStatus(', startAt);
+  assert.ok(startAt >= 0 && endAt > startAt, 'history loader source must be found');
+  const source = caregiverJs.slice(startAt, endAt) + '\nglobalThis.testFetchMealHistory = fetchHistoricalSessions;';
+  const calls = [];
+  const responses = [
+    { data: [
+      { id: 'session-new', event_schema_version: 2, start_time: '2026-11-05T10:00:00Z' },
+      { id: 'session-old', event_schema_version: 1, start_time: '2026-11-04T10:00:00Z' }
+    ], error: null },
+    { data: [
+      { id: 'e1', session_id: 'session-new', event_type: 'COUGH', triggered_at: '2026-11-05T10:01:00Z' },
+      { id: 'e2', session_id: 'session-new', event_type: 'L3_VISIBILITY', triggered_at: '2026-11-05T10:02:00Z' },
+      { id: 'e3', session_id: 'session-old', event_type: 'L4', triggered_at: '2026-11-04T10:02:00Z' }
+    ], error: null }
+  ];
+  const context = {
+    caregiverSessionGeneration: 1,
+    historyRequestGeneration: 0,
+    supabaseClient: { from(table) {
+      const call = { table, filters: [], orders: [] };
+      calls.push(call);
+      const response = responses.shift();
+      const query = {
+        select(columns) { call.columns = columns; return this; },
+        eq(column, value) { call.filters.push(['eq', column, value]); return this; },
+        gte(column, value) { call.filters.push(['gte', column, value]); return this; },
+        in(column, value) { call.filters.push(['in', column, value]); return this; },
+        order(column, options) { call.orders.push([column, options]); return this; },
+        limit(value) { call.limit = value; return this; },
+        then(resolve, reject) { return Promise.resolve(response).then(resolve, reject); }
+      };
+      return query;
+    } },
+    window: { ConnectionCore },
+    updateCharts(rows) { context.chartRows = rows; },
+    renderMealHistory(rows, range) { context.renderedRows = rows; context.renderedRange = range; },
+    setMealHistoryStatus(text) { context.status = text; },
+    console
+  };
+  vm.runInNewContext(source, context);
+  await context.testFetchMealHistory('P001', 'profile-a', 1, 'recent7');
+  assert.deepEqual(calls.map(call => call.table), ['meal_sessions', 'anomaly_logs']);
+  assert.equal(calls[0].limit, 7);
+  assert.deepEqual(calls[1].filters[0], ['in', 'session_id', ['session-old', 'session-new']]);
+  const current = context.chartRows.find(session => session.id === 'session-new');
+  const legacy = context.chartRows.find(session => session.id === 'session-old');
+  assert.equal(current.eventCounts.cough, 1);
+  assert.equal(current.eventCounts.visibility, 1);
+  assert.equal(legacy.alertBreakdownAvailable, false);
+  assert.equal(legacy.eventCounts, null);
+  assert.equal(context.renderedRange, 'recent7');
+});
+
+test('history loader applies the selected 30-day start-time filter', async () => {
+  const startAt = caregiverJs.indexOf('async function fetchHistoricalSessions(');
+  const endAt = caregiverJs.indexOf('\nfunction setMealHistoryStatus(', startAt);
+  const source = caregiverJs.slice(startAt, endAt) + '\nglobalThis.testFetchMealHistory = fetchHistoricalSessions;';
+  const calls = [];
+  const responses = [{ data: [], error: null }];
+  const context = {
+    caregiverSessionGeneration: 1,
+    historyRequestGeneration: 0,
+    supabaseClient: { from(table) {
+      const call = { table, filters: [], orders: [] };
+      calls.push(call);
+      const response = responses.shift();
+      const query = {
+        select() { return this; }, eq(c,v) { call.filters.push(['eq', c, v]); return this; },
+        gte(c,v) { call.filters.push(['gte', c, v]); return this; },
+        order(c,o) { call.orders.push([c,o]); return this; }, limit(n) { call.limit=n; return this; },
+        then(resolve,reject) { return Promise.resolve(response).then(resolve,reject); }
+      };
+      return query;
+    } },
+    window: { ConnectionCore },
+    updateCharts() {}, renderMealHistory() {}, setMealHistoryStatus() {}, console
+  };
+  vm.runInNewContext(source, context);
+  await context.testFetchMealHistory('P001', 'profile-a', 1, '30days');
+  const startFilter = calls[0].filters.find(filter => filter[0] === 'gte' && filter[1] === 'start_time');
+  assert.ok(startFilter, '30-day mode must filter meal start_time');
+  assert.ok(Number.isFinite(Date.parse(startFilter[2])));
+  assert.equal(calls[0].limit, 500);
+});
+
+test('patient session migration adds swallow-pause and event-schema version fields', () => {
+  const migrationPath = path.join(root, 'supabase/migrations/20261106150000_caregiver_history_data.sql');
+  assert.equal(fs.existsSync(migrationPath), true, 'caregiver history migration must exist');
+  const migration = fs.readFileSync(migrationPath, 'utf8');
+  assert.match(migration, /add column if not exists avg_swallow_pause double precision/);
+  assert.match(migration, /add column if not exists event_schema_version smallint/);
+  assert.match(migration, /default 1/);
+});
+
+test('caregiver history UI exposes the agreed range selector, per-meal list and swallow trend', () => {
+  assert.match(caregiverPage, /id="caregiver-history-range"/);
+  assert.match(caregiverPage, /value="recent7"/);
+  assert.match(caregiverPage, /value="30days"/);
+  assert.match(caregiverPage, /id="meal-history-list"/);
+  assert.match(caregiverPage, /id="chart-swallow-trend"/);
 });
 
 test('patient meal writes use a fresh session ID and never fall back to a previous meal', () => {
@@ -104,7 +425,7 @@ test('caregiver endpoint requests a stream after its private channel subscribes'
 
 test('both endpoints derive private topics from the owner-scoped profile UUID', () => {
   assert.match(patientJs, /channelTopic\(currentPatient\.id\)/);
-  assert.match(caregiverJs, /setupWebRTCSignaling\(profile\.id\)/);
+  assert.match(caregiverJs, /setupWebRTCSignaling\(profile\.id(?:, generation)?\)/);
   assert.match(caregiverJs, /channelTopic\(profileId\)/);
 });
 
@@ -120,11 +441,365 @@ test('WebRTC signaling correlates negotiations and buffers early ICE candidates'
 });
 
 test('caregiver history reads the latest sessions but renders them chronologically', () => {
-  assert.match(caregiverJs, /\.order\('created_at', \{ ascending: false \}\)/);
-  assert.match(caregiverJs, /latestSessionsChronological\(data \|\| \[\], 7\)/);
+  assert.match(caregiverJs, /\.order\('(?:start_time|created_at)', \{ ascending: false \}\)/);
+  assert.match(caregiverJs, /\.sort\(\(a, b\) => dateValue\(a\) - dateValue\(b\)\)/);
 });
 
-test('caregiver channel registration resolves to the patient code selected in the UI', () => {
-  assert.match(caregiverPage, /id="caregiver-patient-code"/);
-  assert.match(caregiverJs, /connectToPatient/);
+test('caregiver selector loads profiles and connects using the selected profile code', () => {
+  assert.match(caregiverPage, /<select[^>]*id="caregiver-patient-select"/);
+  assert.match(caregiverPage, /id="btn-refresh-patients"/);
+  assert.doesNotMatch(caregiverPage, /id="btn-connect-patient"[^>]*onclick=/);
+  assert.match(caregiverJs, /loadCaregiverProfiles\(/);
+  assert.match(caregiverJs, /connectToPatient\(\)/);
+});
+
+test('caregiver patient list query uses the authenticated owner-scoped profile table', () => {
+  assert.match(caregiverJs, /\.from\('patient_profiles'\)\s*\.select\('id, patient_code, full_name'\)\s*\.order\('full_name'/);
+  const migration = read('supabase/migrations/20261103120000_online_connection.sql');
+  assert.match(migration, /patient_profiles_owner_select[\s\S]*owner_id = \(select auth\.uid\(\)\)/);
+});
+
+test('caregiver channel registration resolves to the selected profile and filters history by its UUID', () => {
+  assert.match(caregiverJs, /select\.value\s*=\s*profile\.patient_code/);
+  assert.match(caregiverJs, /fetchHistoricalSessions\(normalizedCode, profile\.id(?:, generation)?\)/);
+  assert.match(caregiverJs, /setupWebRTCSignaling\(profile\.id(?:, generation)?\)/);
+});
+
+test('patient switch does not wait for slow history before attaching the new live channel', async () => {
+  const startAt = caregiverJs.indexOf('async function connectToPatient(');
+  const endAt = caregiverJs.indexOf('window.connectToPatient = connectToPatient;', startAt);
+  assert.ok(startAt >= 0 && endAt > startAt, 'connection function source must be found');
+  const source = caregiverJs.slice(startAt, endAt) + '\nglobalThis.testConnectToPatient = connectToPatient;';
+  let finishHistory;
+  const pendingHistory = new Promise(resolve => { finishHistory = resolve; });
+  const flags = { historyStarted: false, signalingStarted: false };
+  const profile = {
+    id: 'profile-new', patient_code: 'P002', full_name: 'Beta', diet_type: 'soft',
+    baseline_chew_duration: 0.85, baseline_swallow_pause: 1.1
+  };
+  const context = {
+    patientSwitchInProgress: false,
+    caregiverSessionGeneration: 0,
+    currentPatientCode: 'P001', currentPatientProfileId: 'profile-old', caregiverClientId: 'old-client',
+    peerConnection: null, supabaseChannel: null, activeNegotiationId: null, currentAnswerPayload: null,
+    remoteCandidateBuffer: { clear() {} },
+    supabaseClient: { from: table => {
+      assert.equal(table, 'patient_profiles');
+      const query = {
+        select() { return this; },
+        eq() { return this; },
+        maybeSingle: async () => ({ data: profile, error: null })
+      };
+      return query;
+    } },
+    window: { ConnectionCore: {} },
+    document: { getElementById: id => id === 'caregiver-patient-select'
+      ? { value: 'P002', disabled: false }
+      : { innerText: '', disabled: false } },
+    resetCaregiverPatientView() {},
+    setRealtimeStatus() {},
+    setPatientListStatus() {},
+    fetchHistoricalSessions() { flags.historyStarted = true; return pendingHistory; },
+    setupWebRTCSignaling: async () => { flags.signalingStarted = true; },
+    CONFIG: { DIET_PROFILES: { soft: { name: '軟食' } } },
+    crypto: { randomUUID: () => 'new-client' },
+    console
+  };
+  vm.runInNewContext(source, context);
+  const connection = context.testConnectToPatient('P002', { quiet: true });
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(flags.historyStarted, true);
+  assert.equal(flags.signalingStarted, true, 'new live signaling should start while history is pending');
+  assert.equal(await connection, true);
+  finishHistory(true);
+});
+
+test('switching caregiver patients clears the previous patient view before querying the new profile', () => {
+  const startAt = caregiverJs.indexOf('async function connectToPatient(');
+  const endAt = caregiverJs.indexOf('window.connectToPatient = connectToPatient;', startAt);
+  const connectFunction = caregiverJs.slice(startAt, endAt);
+  const resetAt = connectFunction.indexOf('resetCaregiverPatientView();');
+  const queryAt = connectFunction.indexOf(".from('patient_profiles')");
+  assert.ok(resetAt >= 0 && queryAt > resetAt);
+  assert.match(caregiverJs, /remoteVideo\.srcObject\s*=\s*null/);
+  assert.match(caregiverJs, /updateCharts\(\[\]\)/);
+});
+
+test('reset caregiver view clears the previous patient video, alerts, and history logs', () => {
+  const startAt = caregiverJs.indexOf('function resetCaregiverPatientView() {');
+  const endAt = caregiverJs.indexOf('\nasync function connectToPatient(', startAt);
+  assert.ok(startAt >= 0 && endAt > startAt, 'patient view reset source must be found');
+  const source = caregiverJs.slice(startAt, endAt) + '\nglobalThis.testResetCaregiverPatientView = resetCaregiverPatientView;';
+  const nodes = new Map();
+  const video = { srcObject: { oldPatient: true }, pause() { this.paused = true; } };
+  const placeholder = { classList: { remove(value) { this.removed = value; } } };
+  const logContainer = { children: ['old patient alert'], replaceChildren(...children) { this.children = children; } };
+  const context = {
+    document: {
+      getElementById(id) {
+        if (id === 'remote-video') return video;
+        if (id === 'no-stream-placeholder') return placeholder;
+        if (id === 'realtime-log-container') return logContainer;
+        if (!nodes.has(id)) nodes.set(id, { innerText: 'old data' });
+        return nodes.get(id);
+      },
+      createElement() { return {}; }
+    },
+    anomaliesChart: {},
+    chewTrendChart: {},
+    swallowTrendChart: {},
+    historyRequestGeneration: 0,
+    currentPatientBaselines: { chew: 0.85, swallow: 1.1 },
+    currentHistoryRange: 'recent7',
+    setMealHistoryStatus() {},
+    renderMealHistory() {},
+    lastLoggedAlertLevel: 'L4',
+    lastLoggedAlertMessage: 'old patient alert',
+    hideCaregiverAlert() { context.alertHidden = true; },
+    updateCharts(sessions) { context.chartSessions = sessions; }
+  };
+  vm.runInNewContext(source, context);
+  context.testResetCaregiverPatientView();
+  assert.equal(video.paused, true);
+  assert.equal(video.srcObject, null);
+  assert.equal(placeholder.classList.removed, 'hidden');
+  assert.equal(context.alertHidden, true);
+  assert.equal(context.chartSessions.length, 0);
+  assert.equal(logContainer.children[0].textContent, '目前尚無異常事件紀錄');
+  assert.equal(nodes.get('caregiver-patient-name').innerText, '尚未選擇個案');
+  assert.equal(context.lastLoggedAlertLevel, null);
+  assert.equal(context.lastLoggedAlertMessage, null);
+});
+
+test('caregiver channel generation isolates in-flight offers during patient switch', () => {
+  assert.match(caregiverJs, /caregiverSessionGeneration/);
+  assert.match(caregiverJs, /channel !== supabaseChannel/);
+  assert.match(caregiverJs, /peerConnection !== activeConnection/);
+});
+
+test('stale realtime channel cannot route old ICE or state events after patient switch', async () => {
+  const startAt = caregiverJs.indexOf('async function setupWebRTCSignaling(');
+  const endAt = caregiverJs.indexOf('\nfunction requestOffer(', startAt);
+  assert.ok(startAt >= 0 && endAt > startAt, 'signaling setup source must be found');
+  const source = caregiverJs.slice(startAt, endAt) + '\nglobalThis.testSetupWebRTCSignaling = setupWebRTCSignaling;';
+  const handlers = {};
+  const oldChannel = {
+    on(_type, filter, handler) { handlers[filter.event] = handler; return this; },
+    subscribe(handler) { handler('SUBSCRIBED'); return this; }
+  };
+  const calls = { candidates: 0, states: 0 };
+  const context = {
+    supabaseClient: { channel: () => oldChannel },
+    window: { ConnectionCore: { channelTopic: id => id, privateChannelOptions: () => ({ private: true }) } },
+    caregiverSessionGeneration: 1,
+    supabaseChannel: null,
+    currentPatientCode: 'P001',
+    currentPatientProfileId: 'profile-old',
+    caregiverClientId: 'client-old',
+    activeNegotiationId: null,
+    currentAnswerPayload: null,
+    remoteCandidateBuffer: { clear() {} },
+    setRealtimeStatus() {},
+    requestOffer() {},
+    receiveRemoteCandidate() { calls.candidates += 1; },
+    handleStateUpdate() { calls.states += 1; },
+    console
+  };
+  vm.runInNewContext(source, context);
+  await context.testSetupWebRTCSignaling('profile-old', 1);
+  context.caregiverSessionGeneration = 2;
+  context.supabaseChannel = {};
+  context.currentPatientCode = 'P002';
+  context.currentPatientProfileId = 'profile-new';
+  context.caregiverClientId = 'client-new';
+  await handlers.signal({ payload: {
+    type: 'candidate', candidate: { candidate: 'old-ice' },
+    negotiationId: 'old-negotiation', clientId: 'client-old'
+  } });
+  handlers.state_update({ payload: { patientCode: 'P001', totalChews: 999 } });
+  assert.equal(calls.candidates, 0);
+  assert.equal(calls.states, 0);
+});
+
+test('late patient history responses cannot overwrite the next selected patient', async () => {
+  const startAt = caregiverJs.indexOf('async function fetchHistoricalSessions(');
+  const endAt = caregiverJs.indexOf('\nfunction setMealHistoryStatus(', startAt);
+  assert.ok(startAt >= 0 && endAt > startAt, 'history loader source must be found');
+  const source = caregiverJs.slice(startAt, endAt) + '\nglobalThis.testFetchHistoricalSessions = fetchHistoricalSessions;';
+  let resolveQuery;
+  const pendingQuery = new Promise(resolve => { resolveQuery = resolve; });
+  const query = {
+    eq() { return this; },
+    order() { return this; },
+    limit() { return pendingQuery; }
+  };
+  const chartUpdates = [];
+  const context = {
+    supabaseClient: { from: table => { assert.equal(table, 'meal_sessions'); return { select: () => query }; } },
+    caregiverSessionGeneration: 1,
+    historyRequestGeneration: 0,
+    currentHistoryRange: 'recent7',
+    window: { ConnectionCore: { latestSessionsChronological: data => data } },
+    updateCharts: data => chartUpdates.push(data),
+    console
+  };
+  vm.runInNewContext(source, context);
+  const load = context.testFetchHistoricalSessions('P001', 'profile-old', 1);
+  context.caregiverSessionGeneration = 2;
+  resolveQuery({ data: [{ id: 'old-patient-session' }], error: null });
+  await load;
+  assert.equal(chartUpdates.length, 0, 'stale patient history must not replace the new selection view');
+});
+
+test('caregiver profile loader populates a safe select and prefers requested then current patient', async () => {
+  const startAt = caregiverJs.indexOf('async function loadCaregiverProfiles(');
+  const endAt = caregiverJs.indexOf('\nasync function connectToPatient(', startAt);
+  assert.ok(startAt >= 0 && endAt > startAt, 'profile loader source must be found');
+  const source = caregiverJs.slice(startAt, endAt) + '\nglobalThis.testLoadCaregiverProfiles = loadCaregiverProfiles;';
+  const nodes = new Map();
+  const calls = {};
+  const makeNode = () => ({
+    disabled: false,
+    value: '',
+    options: [],
+    replaceChildren() { this.options = []; },
+    appendChild(option) { this.options.push(option); }
+  });
+  const context = {
+    supabaseClient: {
+      from(table) {
+        calls.table = table;
+        return { select(columns) {
+          calls.columns = columns;
+          return { order: async (column, options) => {
+            calls.order = [column, options];
+            return { data: [
+              { patient_code: 'P001', full_name: 'Alpha' },
+              { patient_code: 'P002', full_name: 'Beta' }
+            ], error: null };
+          } };
+        } };
+      }
+    },
+    currentPatientCode: 'P002',
+    document: {
+      getElementById(id) { if (!nodes.has(id)) nodes.set(id, makeNode()); return nodes.get(id); },
+      createElement() { return { value: '', textContent: '' }; }
+    },
+    setPatientListStatus(message) { calls.status = message; },
+    console
+  };
+  vm.runInNewContext(source, context);
+  const profiles = await context.testLoadCaregiverProfiles('P001');
+  const select = nodes.get('caregiver-patient-select');
+  assert.deepEqual(profiles.map(profile => profile.patient_code), ['P001', 'P002']);
+  assert.equal(calls.table, 'patient_profiles');
+  assert.equal(calls.columns, 'id, patient_code, full_name');
+  assert.equal(calls.order[0], 'full_name');
+  assert.equal(select.value, 'P001');
+  assert.deepEqual(select.options.map(option => option.textContent), ['Alpha (P001)', 'Beta (P002)']);
+  assert.equal(nodes.get('btn-connect-patient').disabled, false);
+  await context.testLoadCaregiverProfiles('NOT_PRESENT');
+  assert.equal(select.value, 'P002', 'existing selection is preferred when requested code is unavailable');
+});
+
+test('deprecated diet selector card and caregiver non-cough stat cards are removed cleanly', () => {
+  assert.doesNotMatch(patientPage, /請選擇本次用餐質地/);
+  assert.doesNotMatch(patientPage, /id="btn-diet-(regular|soft|pureed)"/);
+
+  assert.doesNotMatch(caregiverPage, /id="stat-chews"/);
+  assert.doesNotMatch(caregiverPage, /id="stat-swallows"/);
+  assert.doesNotMatch(caregiverPage, /id="stat-jaw-vel"/);
+  assert.doesNotMatch(caregiverPage, /id="stat-pouching"/);
+  assert.match(caregiverPage, /id="stat-coughs"/);
+
+  const startAt = caregiverJs.indexOf('function handleStateUpdate(state) {');
+  const endAt = caregiverJs.indexOf('function showCaregiverAlert(', startAt);
+  const source = caregiverJs.slice(startAt, endAt) + '\nglobalThis.testHandleStateUpdate = handleStateUpdate;';
+  const coughNode = { innerText: '0' };
+  const dietNode = { innerText: '-' };
+  const context = {
+    document: {
+      getElementById(id) {
+        if (id === 'stat-coughs') return coughNode;
+        if (id === 'caregiver-diet-type') return dietNode;
+        return null;
+      }
+    },
+    CONFIG: { DIET_PROFILES: { soft: { name: '軟食餐盒' } } },
+    lastLoggedAlertLevel: null,
+    lastLoggedAlertMessage: null,
+    currentPatientCode: 'P001',
+    showCaregiverAlert() {},
+    addRealtimeLog() {},
+    hideCaregiverAlert() {},
+    setRealtimeStatus() {}
+  };
+  vm.runInNewContext(source, context);
+  context.testHandleStateUpdate({
+    patientCode: 'P001',
+    patientName: '王爺爺',
+    dietType: 'soft',
+    totalChews: 25,
+    totalSwallows: 3,
+    jawVelocity: -0.27,
+    pouchingEvents: 0,
+    coughEvents: 6,
+    activeAlertLevel: null,
+    sessionEnded: false
+  });
+  assert.equal(coughNode.innerText, 6);
+});
+
+test('L4 overlay circles share exact geometry with handNearChestOrThroat and low-FPS body shaking works', () => {
+  assert.match(patientJs, /lastCoughTime = -Infinity/);
+  assert.match(patientJs, /CHOKE_SIMULTANEOUS_TRIGGER_SEC = 3\.0/);
+  assert.match(patientJs, /ConnectionCore\.evaluateL4Candidate\(/);
+  assert.match(patientJs, /chokeDangerAccumulator\.update\(/);
+
+  // Verify drawOriginalDetectionOverlay uses getDangerZoneGeometry instead of mismatched canvas-width radii
+  const overlayIdx = patientJs.indexOf('function drawOriginalDetectionOverlay(');
+  const overlaySrc = patientJs.slice(overlayIdx);
+  assert.match(overlaySrc, /getDangerZoneGeometry\(nose, chin, w, h\)/);
+  assert.doesNotMatch(overlaySrc, /faceH \* 0\.55 \* w/);
+
+  // Execute getDangerZoneGeometry, handNearChestOrThroat, and checkContinuousBodyShaking in VM
+  const startAt = patientJs.indexOf('function estimateThroat(');
+  const endAt = patientJs.indexOf('function calculateMAR(', startAt);
+  const source = patientJs.slice(startAt, endAt) + '\nglobalThis.fns = { getDangerZoneGeometry, handNearChestOrThroat, checkContinuousBodyShaking };';
+  const context = {
+    bodyMotionHistory: [],
+    window: { ConnectionCore },
+    Math,
+    Number,
+    Boolean
+  };
+  vm.runInNewContext(source, context);
+
+  const nose = { x: 0.5, y: 0.35 };
+  const chin = { x: 0.5, y: 0.50 };
+  const geom = context.fns.getDangerZoneGeometry(nose, chin, 640, 480);
+  const onePointHand = [
+    [{ x: geom.chestCenter.x / 640, y: geom.chestCenter.y / 480 }, ...Array.from({ length: 20 }, () => ({ x: 0.02, y: 0.02 }))]
+  ];
+  const stillCheck = context.fns.handNearChestOrThroat(onePointHand, nose, chin, 640, 480, 2);
+  const shakingCheck = context.fns.handNearChestOrThroat(onePointHand, nose, chin, 640, 480, 1);
+  assert.equal(stillCheck.near, false, 'single stray point is ignored when body is still');
+  assert.equal(shakingCheck.near, true, 'single point in chest zone registers during shaking motion blur');
+  assert.equal(shakingCheck.chestRadius, geom.chestRadius);
+  assert.equal(shakingCheck.throatRadius, geom.throatRadius);
+
+  // Low-FPS (6 FPS: 5 samples over 0.8s) moderate struggling shake registers true
+  const samples = [
+    { x: 0.45, y: 0.35, t: 1.0 },
+    { x: 0.56, y: 0.37, t: 1.2 },
+    { x: 0.44, y: 0.34, t: 1.4 },
+    { x: 0.55, y: 0.38, t: 1.6 },
+    { x: 0.46, y: 0.35, t: 1.8 }
+  ];
+  let shakeDetected = false;
+  for (const s of samples) {
+    shakeDetected = context.fns.checkContinuousBodyShaking({ x: s.x, y: s.y }, 72, s.t, 640, 480);
+  }
+  assert.equal(shakeDetected, true, 'moderate distress shaking at 5-6 FPS must not be locked out');
 });

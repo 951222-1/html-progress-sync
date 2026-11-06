@@ -69,6 +69,7 @@ let currentPatient = { id: null, patient_code: 'P001', full_name: '王爺爺', d
 let currentDiet = 'soft'; // regular, soft, pureed
 let isMealActive = false;
 const mealSessionTracker = window.ConnectionCore.createMealSessionTracker();
+const swallowPauseTracker = window.ConnectionCore.createSwallowPauseTracker();
 const mealStartLock = window.ConnectionCore.createStartLock();
 let currentMealSessionInsertPromise = Promise.resolve(null);
 
@@ -87,7 +88,7 @@ let jawMovementHistory = []; // max len 30
 let marSmooth = null;
 let jawSmooth = null;
 
-let lastCoughTime = 0.0;
+let lastCoughTime = -Infinity;
 let handOnNeckStartTime = null;
 let handOnNeckDuration = 0.0;
 let lastChokeAlertTime = 0.0;
@@ -97,22 +98,53 @@ let noseSpeedHistory = []; // max len 30
 let lastChewFlipTime = 0.0;
 let coughFrameCounter = 0;
 let faceLostSince = null;
+let faceLossVisibilityLogged = false;
 
 let lastNose = null;
 let lastChin = null;
 let lastAnchorTs = 0.0;
 const ANCHOR_GRACE_SEC = 2.0;
 const FACE_LOST_ALERT_SEC = 3.0;
+const CHOKE_FACE_LOSS_WARNING_GRACE_SEC = 0.6;
+const chokeFaceLossWarningGuard = window.ConnectionCore.createFaceLossWarningGuard(CHOKE_FACE_LOSS_WARNING_GRACE_SEC);
+let lastChokeVisibilityWarningAt = -Infinity;
 
-// 🎯 身體晃動與拍胸五秒哽噎判定狀態 (防止晃動過敏，嚴格要求同時持續5秒)
+// 🎯 L4 急性哽噎判定狀態 (3.0s 門檻 + 0.6s 緩衝 + 0.5x/s 漏桶漸進衰減 + 三路徑高特異性觸發)
 let bodyMotionHistory = []; // { x, y, faceSize, time }
 let isBodyShakingContinuous = false;
 let isHandOnChest = false;
 let isHandOnChestOrThroat = false;
+let handsInDangerZoneCount = 0;
 let chokeSimultaneousStartTime = null;
 let chokeSimultaneousDuration = 0.0;
 let chokeGraceStartTime = null;
-const CHOKE_SIMULTANEOUS_TRIGGER_SEC = 5.0; // 必須同時持續滿 5 秒
+const CHOKE_SIMULTANEOUS_TRIGGER_SEC = 3.0; // 縮短為 3.0 秒門檻（雙手/嗆咳後抓喉為 2.5 秒）
+const CHOKE_POST_COUGH_WINDOW_SEC = 8.0;
+const chokeDangerAccumulator = window.ConnectionCore.createChokeDangerAccumulator({
+    triggerSec: CHOKE_SIMULTANEOUS_TRIGGER_SEC,
+    graceSec: 0.6,
+    decayRate: 0.5
+});
+
+// 🎤 Google YAMNet AI 咳嗽與呼吸道聲紋辨識設定 (對齊桌面版防哽咽裝置4_2.py)
+const YAMNET_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/1/yamnet.tflite";
+const YAMNET_WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.0/wasm";
+const YAMNET_HOP_MS = 500;
+const YAMNET_CHOKE_TH_FUSION = 0.15;
+const YAMNET_COUGH_RECORD_TH = 0.20;
+const YAMNET_COUGH_SOLO_TH = 0.32;
+const YAMNET_CHOKE_KEYWORDS = ["cough", "throat", "choking", "gagging", "gasp", "wheeze", "pant"];
+const YAMNET_SPEECH_KEYWORDS = ["speech", "conversation", "narration", "chatter", "hubbub"];
+const YAMNET_LABEL_ZH = {
+    "cough": "咳嗽聲",
+    "throat clearing": "清喉嚨/乾咳",
+    "throat": "喉部嗆咳聲",
+    "choking": "哽噎嗆咳聲",
+    "gagging": "作嘔反胃聲",
+    "gasp": "倒抽氣/喘息",
+    "wheeze": "氣道喘鳴聲",
+    "pant": "急促喘氣聲"
+};
 
 // AI 與媒體串流變數
 let webcamVideo = null;
@@ -124,6 +156,27 @@ let handLandmarker = null;
 let audioCtx = null;
 let audioAnalyser = null;
 let audioDataArray = null;
+let audioClassifier = null;
+let isAudioClassifierReady = false;
+let audioClassifierFailed = false;
+let audioMediaSource = null;
+let audioScriptNode = null;
+let audioMuteGain = null;
+let audioRingBuffer = null;
+let audioSamplesCollected = 0;
+let audioInferenceTimer = null;
+let lastAiCoughTime = -Infinity;
+let aiAudioState = {
+    chokeScore: 0.0,
+    rawCoughScore: 0.0,
+    speechScore: 0.0,
+    topChokeLabel: "",
+    topChokeLabelZh: "咳嗽聲",
+    topOverallLabel: "-",
+    rmsEnergy: 0.0,
+    lastPeakScore: 0.0,
+    updatedAt: 0.0
+};
 
 // 用餐狀態統計與演算法數據
 let mealMetrics = {
@@ -145,6 +198,8 @@ let mealMetrics = {
 // 手部與脖子狀態
 let isHandOnNeck = false;
 let activeAlertLevel = null;
+let activeAlertMessage = null;
+let activeAlertBaseMessage = null;
 let audioBuzzerInterval = null;
 
 // 獨立核心偵測演算法模組實例 (Standalone Detection Core)
@@ -170,6 +225,7 @@ async function startApp() {
     initSupabase();
     setupCanvasAndVideo();
     initMediaPipe();
+    initAudioClassifier();
     if (!supabaseClient) {
         window.AuthUI.showSetupError('系統連線設定尚未完成。請聯絡管理者，不會以未受保護的離線模式繼續。');
         return;
@@ -215,7 +271,8 @@ function selectDiet(dietKey) {
         activeBtn.classList.add('active', 'bg-blue-600', 'text-white');
     }
     const dietInfo = CONFIG.DIET_PROFILES[dietKey];
-    document.getElementById('hud-diet').innerText = dietInfo ? dietInfo.name : dietKey;
+    const hudDiet = document.getElementById('hud-diet');
+    if (hudDiet) hudDiet.innerText = dietInfo ? dietInfo.name : dietKey;
 }
 
 function openLoginModal() {
@@ -391,6 +448,49 @@ function setupCanvasAndVideo() {
     aiCtx = aiCanvas.getContext('2d');
 }
 
+// 4b. 初始化 Google YAMNet AI 咳嗽與呼吸道聲紋辨識模型
+async function initAudioClassifier() {
+    const micLabel = document.getElementById('hud-mic-label');
+    try {
+        let AudioResolver = window.AudioFilesetResolver || (window.tasksAudio && window.tasksAudio.FilesetResolver);
+        let ClassifierCls = window.AudioClassifier || (window.tasksAudio && window.tasksAudio.AudioClassifier);
+
+        if (!AudioResolver || !ClassifierCls) {
+            const audioMod = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.0");
+            window.tasksAudio = audioMod;
+            AudioResolver = audioMod.FilesetResolver;
+            ClassifierCls = audioMod.AudioClassifier;
+        }
+
+        if (!AudioResolver || !ClassifierCls) {
+            throw new Error('MediaPipe Tasks Audio symbols unavailable');
+        }
+
+        const audioFileset = await AudioResolver.forAudioTasks(YAMNET_WASM_URL);
+        audioClassifier = await ClassifierCls.createFromOptions(audioFileset, {
+            baseOptions: { modelAssetPath: YAMNET_MODEL_URL },
+            maxResults: 30,
+            scoreThreshold: 0.01
+        });
+
+        isAudioClassifierReady = true;
+        audioClassifierFailed = false;
+        console.log('✅ [YAMNet] Google YAMNet AI 咳嗽聲辨識模型載入完成！');
+        if (micLabel) {
+            micLabel.innerText = isMealActive ? '🎤 AI聽診中' : '🎤 AI聽診就緒';
+            micLabel.className = 'text-[10px] text-emerald-400 font-semibold';
+        }
+    } catch (err) {
+        console.warn('⚠️ [YAMNet] AI 聲音模型載入失敗，退回高能量備援模式:', err);
+        isAudioClassifierReady = false;
+        audioClassifierFailed = true;
+        if (micLabel) {
+            micLabel.innerText = '🎤 音量備援';
+            micLabel.className = 'text-[10px] text-amber-400';
+        }
+    }
+}
+
 // 5. 多階相機與麥克風容錯啟動 (3-Tier Fallback Camera Getter)
 async function getWebcamStream() {
     if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
@@ -438,6 +538,15 @@ async function startMealSession() {
         console.log('[Camera] Meal session startup is already in progress.');
         return;
     }
+    chokeFaceLossWarningGuard.reset();
+    chokeDangerAccumulator.reset();
+    lastChokeVisibilityWarningAt = -Infinity;
+    lastCoughTime = -Infinity;
+    lastAiCoughTime = -Infinity;
+    window._pendingAiCoughEvent = null;
+    chokeSimultaneousStartTime = null;
+    chokeSimultaneousDuration = 0.0;
+    handsInDangerZoneCount = 0;
 
     try {
         webcamStream = await getWebcamStream();
@@ -481,6 +590,7 @@ async function startMealSession() {
             pouchingEvents: 0,
             riskLevel: 'NORMAL'
         };
+        swallowPauseTracker.reset();
 
         isMealActive = true;
         const btnStart = document.getElementById('btn-start-meal');
@@ -506,7 +616,8 @@ async function startMealSession() {
                     patient_id: currentPatient.id,
                     diet_type: currentDiet,
                     start_time: new Date().toISOString(),
-                    risk_level: 'NORMAL'
+                    risk_level: 'NORMAL',
+                    event_schema_version: 2
                 }]).select().single();
                 if (error) throw error;
                 return data?.id || null;
@@ -626,6 +737,7 @@ async function endMealSession() {
                 resendOfferAfterCreation = false;
                 remoteCandidateBuffer.clear();
                 stopBuzzerSound();
+                teardownAudioAnalyzer();
             },
             async sessionId => {
                 if (!supabaseClient) return;
@@ -634,6 +746,7 @@ async function endMealSession() {
                     total_duration_sec: durationSec,
                     total_chew_count: mealMetrics.totalChews,
                     avg_chew_duration: parseFloat(avgChewTime.toFixed(2)),
+                    avg_swallow_pause: swallowPauseTracker.snapshot().average,
                     cough_count_l1: mealMetrics.coughCountL1,
                     cough_count_l2: mealMetrics.coughCountL2,
                     choking_events_l3: mealMetrics.chokingEventsL3,
@@ -659,18 +772,231 @@ async function endMealSession() {
     }
 }
 
-// 6. Web Audio API 聲學分析
+// 6. Web Audio API 聲學分析 ＋ Google YAMNet 1.05 秒滑動音訊環形緩衝區推論
+function teardownAudioAnalyzer() {
+    if (audioInferenceTimer) {
+        clearInterval(audioInferenceTimer);
+        audioInferenceTimer = null;
+    }
+    try { if (audioScriptNode) { audioScriptNode.onaudioprocess = null; audioScriptNode.disconnect(); } } catch (e) {}
+    try { if (audioMuteGain) audioMuteGain.disconnect(); } catch (e) {}
+    try { if (audioAnalyser) audioAnalyser.disconnect(); } catch (e) {}
+    try { if (audioMediaSource) audioMediaSource.disconnect(); } catch (e) {}
+    audioScriptNode = null;
+    audioMuteGain = null;
+    audioAnalyser = null;
+    audioMediaSource = null;
+    audioDataArray = null;
+    audioRingBuffer = null;
+    audioSamplesCollected = 0;
+    try {
+        if (audioCtx && audioCtx.state !== 'closed') {
+            audioCtx.close().catch(() => {});
+        }
+    } catch (e) {}
+    audioCtx = null;
+}
+
 function setupAudioAnalyzer(stream) {
     try {
+        teardownAudioAnalyzer();
         audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-        const source = audioCtx.createMediaStreamSource(stream);
+        if (audioCtx.state === 'suspended') {
+            audioCtx.resume().catch(() => {});
+        }
+
+        audioMediaSource = audioCtx.createMediaStreamSource(stream);
         audioAnalyser = audioCtx.createAnalyser();
         audioAnalyser.fftSize = 256;
-        source.connect(audioAnalyser);
-
+        audioMediaSource.connect(audioAnalyser);
         audioDataArray = new Uint8Array(audioAnalyser.frequencyBinCount);
+
+        const ringLength = Math.ceil(audioCtx.sampleRate * 1.05);
+        audioRingBuffer = new Float32Array(ringLength);
+        audioSamplesCollected = 0;
+
+        audioScriptNode = audioCtx.createScriptProcessor(4096, 1, 1);
+        audioMuteGain = audioCtx.createGain();
+        audioMuteGain.gain.value = 0.0;
+
+        audioScriptNode.onaudioprocess = (event) => {
+            if (!audioRingBuffer) return;
+            const input = event.inputBuffer.getChannelData(0);
+            const n = input.length;
+            const total = audioRingBuffer.length;
+            if (n >= total) {
+                audioRingBuffer.set(input.subarray(n - total), 0);
+                audioSamplesCollected = total;
+            } else {
+                audioRingBuffer.copyWithin(0, n);
+                audioRingBuffer.set(input, total - n);
+                audioSamplesCollected = Math.min(total, audioSamplesCollected + n);
+            }
+        };
+
+        audioMediaSource.connect(audioScriptNode);
+        audioScriptNode.connect(audioMuteGain);
+        audioMuteGain.connect(audioCtx.destination);
+
+        audioInferenceTimer = setInterval(runYamnetInference, YAMNET_HOP_MS);
+
+        const micLabel = document.getElementById('hud-mic-label');
+        if (micLabel) {
+            if (isAudioClassifierReady) {
+                micLabel.innerText = '🎤 AI聽診中';
+                micLabel.className = 'text-[10px] text-emerald-400 font-semibold';
+            } else if (!audioClassifierFailed) {
+                micLabel.innerText = '🎤 AI載入中';
+                micLabel.className = 'text-[10px] text-slate-400';
+            }
+        }
     } catch (e) {
-        console.error('[Audio] Analyser setup error:', e);
+        console.error('[Audio] Analyser & YAMNet stream setup error:', e);
+    }
+}
+
+function updateMicHudBadge(nowSec = performance.now() / 1000.0) {
+    const micPill = document.getElementById('hud-mic-pill');
+    const micLabel = document.getElementById('hud-mic-label');
+    if (!micLabel) return;
+
+    if (!isAudioClassifierReady) {
+        if (audioClassifierFailed) {
+            micLabel.innerText = '🎤 音量備援';
+            micLabel.className = 'text-[10px] text-amber-400';
+        }
+        return;
+    }
+
+    const recentCoughAge = nowSec - lastAiCoughTime;
+    if (recentCoughAge >= 0 && recentCoughAge <= 2.5) {
+        const pct = Math.min(99, Math.round(aiAudioState.lastPeakScore * 100));
+        micLabel.innerText = `🎤 ${aiAudioState.topChokeLabelZh} ${pct}%`;
+        micLabel.className = 'text-[10px] text-rose-300 font-bold animate-pulse';
+        if (micPill) {
+            micPill.className = 'absolute top-3 right-3 bg-rose-950/90 backdrop-blur px-2.5 py-1.5 rounded-xl border border-rose-500/80 flex items-center space-x-2 transition-colors duration-200 shadow-lg';
+        }
+    } else {
+        micLabel.innerText = isMealActive ? '🎤 AI聽診中' : '🎤 AI聽診就緒';
+        micLabel.className = 'text-[10px] text-emerald-400 font-semibold';
+        if (micPill) {
+            micPill.className = 'absolute top-3 right-3 bg-slate-900/80 backdrop-blur px-2.5 py-1.5 rounded-xl border border-slate-700/60 flex items-center space-x-2 transition-colors duration-200';
+        }
+    }
+}
+
+function runYamnetInference() {
+    if (!isMealActive || !isAudioClassifierReady || !audioClassifier || !audioCtx || !audioRingBuffer) return;
+    if (audioCtx.state === 'suspended') {
+        audioCtx.resume().catch(() => {});
+        return;
+    }
+    if (audioSamplesCollected < Math.floor(audioCtx.sampleRate * 0.98)) return;
+    if (audioBuzzerInterval !== null) return;
+
+    const nowSec = performance.now() / 1000.0;
+    let sumSq = 0.0;
+    for (let i = 0; i < audioRingBuffer.length; i++) {
+        const v = audioRingBuffer[i];
+        sumSq += v * v;
+    }
+    const rms = Math.sqrt(sumSq / audioRingBuffer.length);
+    aiAudioState.rmsEnergy = rms;
+
+    if (rms < 0.004) {
+        aiAudioState.chokeScore = 0.0;
+        aiAudioState.rawCoughScore = 0.0;
+        aiAudioState.speechScore = 0.0;
+        aiAudioState.updatedAt = nowSec;
+        updateMicHudBadge(nowSec);
+        return;
+    }
+
+    try {
+        const results = audioClassifier.classify(audioRingBuffer, audioCtx.sampleRate);
+        let bestChokeScore = 0.0;
+        let bestRawCough = 0.0;
+        let bestSpeech = 0.0;
+        let bestChokeCat = "";
+        let topOverall = "-";
+
+        if (Array.isArray(results)) {
+            for (const res of results) {
+                const clsList = res && res.classifications;
+                if (!clsList || clsList.length === 0) continue;
+                const cats = clsList[0].categories || [];
+                if (cats.length > 0 && topOverall === "-") {
+                    topOverall = cats[0].categoryName || cats[0].displayName || "-";
+                }
+
+                let chokeSum = 0.0;
+                let speechSum = 0.0;
+                let topChokeSingleScore = 0.0;
+                let topChokeSingleName = "";
+
+                for (const cat of cats) {
+                    const rawName = (cat.categoryName || cat.displayName || "");
+                    const nameLower = rawName.toLowerCase();
+                    const sc = cat.score || 0.0;
+
+                    if (YAMNET_CHOKE_KEYWORDS.some(k => nameLower.includes(k))) {
+                        chokeSum += sc;
+                        if (sc > topChokeSingleScore) {
+                            topChokeSingleScore = sc;
+                            topChokeSingleName = rawName;
+                        }
+                    }
+                    if (YAMNET_SPEECH_KEYWORDS.some(k => nameLower.includes(k))) {
+                        speechSum += sc;
+                    }
+                }
+
+                const suppressedScore = Math.max(0.0, chokeSum - 0.5 * speechSum);
+                if (suppressedScore >= bestChokeScore) {
+                    bestChokeScore = suppressedScore;
+                    bestRawCough = chokeSum;
+                    bestSpeech = speechSum;
+                    bestChokeCat = topChokeSingleName;
+                }
+            }
+        }
+
+        let zhLabel = "咳嗽聲";
+        const lowerCat = bestChokeCat.toLowerCase();
+        for (const [k, v] of Object.entries(YAMNET_LABEL_ZH)) {
+            if (lowerCat.includes(k)) {
+                zhLabel = v;
+                break;
+            }
+        }
+
+        aiAudioState.chokeScore = bestChokeScore;
+        aiAudioState.rawCoughScore = bestRawCough;
+        aiAudioState.speechScore = bestSpeech;
+        aiAudioState.topChokeLabel = bestChokeCat;
+        aiAudioState.topChokeLabelZh = zhLabel;
+        aiAudioState.topOverallLabel = topOverall;
+        aiAudioState.updatedAt = nowSec;
+
+        if (bestChokeScore >= YAMNET_CHOKE_TH_FUSION) {
+            lastAiCoughTime = nowSec;
+            lastCoughTime = nowSec;
+            aiAudioState.lastPeakScore = bestChokeScore;
+        }
+
+        const recordTh = (faceLostSince === null) ? YAMNET_COUGH_RECORD_TH : YAMNET_COUGH_SOLO_TH;
+        if (bestChokeScore >= recordTh) {
+            window._pendingAiCoughEvent = {
+                time: nowSec,
+                score: bestChokeScore,
+                labelZh: zhLabel,
+                rawLabel: bestChokeCat || "Cough"
+            };
+        }
+
+        updateMicHudBadge(nowSec);
+    } catch (err) {
+        console.warn('[YAMNet] Audio classification inference warning:', err);
     }
 }
 
@@ -719,6 +1045,8 @@ async function processVideoFrame(now) {
 
     if (faceLandmarks) {
         faceLostSince = null;
+        faceLossVisibilityLogged = false;
+        chokeFaceLossWarningGuard.update(true, false, currentTime);
 
         // 取出關鍵特徵點 (標號與原版 478 Mesh 對齊)
         const chin = faceLandmarks[152];
@@ -764,11 +1092,19 @@ async function processVideoFrame(now) {
         lastChin = { x: chin.x, y: chin.y };
         lastAnchorTs = currentTime;
 
-        // 🎯 手抓喉嚨與胸口拍胸手勢偵測
-        const handCheck = handNearChestOrThroat(handLandmarks, nose, chin, w, h);
+        // 🎯 先計算身體掙扎晃動，若處於搖晃狀態則放寬手部感應關節點數 (>=1 點即生效，抗動態模糊)
+        const faceSize = Math.hypot((nose.x - chin.x) * w, (nose.y - chin.y) * h);
+        isBodyShakingContinuous = checkContinuousBodyShaking(nose, faceSize, currentTime, w, h);
+        prevNose = { x: nose.x, y: nose.y };
+
+        // 🎯 手抓喉嚨與上胸口拍胸手勢偵測 (與畫面疊圖幾何 100% 一致)
+        const handCheck = handNearChestOrThroat(
+            handLandmarks, nose, chin, w, h, isBodyShakingContinuous ? 1 : 2
+        );
         isHandOnNeck = handCheck.isThroat;
         isHandOnChest = handCheck.isChest;
         isHandOnChestOrThroat = handCheck.near;
+        handsInDangerZoneCount = handCheck.handsInZone;
 
         // 影像嗆咳跡象 (提高門檻至連續 6 幀確認，過濾咀嚼干擾)
         if (movementStd > 18.0 && Math.abs(mealMetrics.jawVelocity) > 10.0) {
@@ -780,11 +1116,6 @@ async function processVideoFrame(now) {
             coughFrameCounter = 0;
             visionCough = true;
         }
-
-        // 🎯 身體持續前後左右晃動分析 (嚴格過濾一般日常微幅晃動與進食咀嚼)
-        const faceSize = Math.hypot((nose.x - chin.x) * w, (nose.y - chin.y) * h);
-        isBodyShakingContinuous = checkContinuousBodyShaking(nose, faceSize, currentTime, w, h);
-        prevNose = { x: nose.x, y: nose.y };
 
         // ------------------------------------------------------------------
         // 🧠 原版五階段進食狀態機 (ST_IDLE, ST_INGEST, ST_CHEW, ST_SWALLOW, ST_CHECK)
@@ -825,6 +1156,7 @@ async function processVideoFrame(now) {
             }
         } else if (currentState === ST_SWALLOW) {
             if ((currentTime - stateStartTime) > 0.6) {
+                swallowPauseTracker.record(currentTime - stateStartTime);
                 currentState = ST_CHECK;
                 stateStartTime = currentTime;
                 mealMetrics.swallowCount = (mealMetrics.swallowCount || 0) + 1;
@@ -867,12 +1199,32 @@ async function processVideoFrame(now) {
         drawOriginalDetectionOverlay(aiCtx, faceLandmarks, handLandmarks, w, h, currentState, mar, movementStd, mealMetrics.totalChews, isHandOnNeck, isHandOnChest, isBodyShakingContinuous, chokeSimultaneousDuration);
 
     } else {
+        const l4CandidateAtFaceLoss = isMealActive && (
+            (isBodyShakingContinuous && isHandOnChestOrThroat) ||
+            (chokeSimultaneousStartTime !== null && chokeSimultaneousDuration > 0)
+        );
+        const visibilityWarningDue = chokeFaceLossWarningGuard.update(false, l4CandidateAtFaceLoss, currentTime);
+        if (visibilityWarningDue && currentTime - lastChokeVisibilityWarningAt >= 10.0 && activeAlertLevel !== 'L4') {
+            lastChokeVisibilityWarningAt = currentTime;
+            faceLossVisibilityLogged = true;
+            showChokeVisibilityWarning(
+                '⚠️【疑似哽噎／視覺遮蔽警示】剛偵測到身體晃動與胸口／喉嚨手勢，但臉部畫面遮蔽，無法確認是否為哽噎；請立即目視確認個案。'
+            );
+        }
+
         // 人臉遺失快取處理 (2.0 秒錨點快取手勢)
         if (lastNose && (currentTime - lastAnchorTs) < ANCHOR_GRACE_SEC) {
-            isHandOnNeck = handNearThroat(handLandmarks, lastNose, lastChin, w, h, 0.6);
+            const anchorHandCheck = handNearChestOrThroat(handLandmarks, lastNose, lastChin, w, h, 2);
+            isHandOnNeck = anchorHandCheck.isThroat;
+            handsInDangerZoneCount = anchorHandCheck.handsInZone;
         } else {
             isHandOnNeck = false;
+            handsInDangerZoneCount = 0;
         }
+        isBodyShakingContinuous = false;
+        isHandOnChest = false;
+        isHandOnChestOrThroat = isHandOnNeck;
+        bodyMotionHistory = [];
         prevNose = null;
         noseSpeedHistory = [];
         coughFrameCounter = 0;
@@ -881,7 +1233,12 @@ async function processVideoFrame(now) {
             if (faceLostSince === null) {
                 faceLostSince = currentTime;
             } else if (currentTime - faceLostSince > FACE_LOST_ALERT_SEC) {
-                triggerAlertLevel('L3', '⚠️【異常警報】進食過程中人臉消失，請確認個案狀況！');
+                const lostMsg = '⚠️【視覺遮蔽警示】進食過程中人臉消失，請目視確認個案狀況！';
+                if (!faceLossVisibilityLogged && currentTime - lastChokeVisibilityWarningAt >= 10.0) {
+                    lastChokeVisibilityWarningAt = currentTime;
+                    showChokeVisibilityWarning(lostMsg, 'VISIBILITY_LOSS');
+                    faceLossVisibilityLogged = true;
+                }
                 faceLostSince = currentTime;
             }
         }
@@ -890,56 +1247,76 @@ async function processVideoFrame(now) {
         drawOriginalDetectionOverlay(aiCtx, null, handLandmarks, w, h, currentState, 0, 0, mealMetrics.totalChews, isHandOnNeck, isHandOnChest, isBodyShakingContinuous, chokeSimultaneousDuration);
     }
 
-    // ------------------------------------------------------------------
-    // 🚨 哽噎與拍胸晃動 5 秒決策邏輯 (核心規則：晃動 + 拍胸 同時持續 5 秒才觸發警報)
-    // ------------------------------------------------------------------
-    const isSimultaneous = isBodyShakingContinuous && isHandOnChestOrThroat;
+    // 咳嗽狀態追蹤 (結合 Google YAMNet AI 咳嗽聲紋 ＋ 影像頭部急抽動；同幀嗆咳立即賦能路徑 C)
+    const pendingAiCough = (window._pendingAiCoughEvent && (currentTime - window._pendingAiCoughEvent.time) <= 1.2)
+        ? window._pendingAiCoughEvent
+        : null;
+    const aiCoughNow = Boolean(pendingAiCough);
+    const fallbackAudioCough = (!isAudioClassifierReady && audioClassifierFailed && audioEnergy > 0.35);
 
-    if (isSimultaneous) {
-        if (chokeSimultaneousStartTime === null) {
-            chokeSimultaneousStartTime = currentTime;
+    if (visionCough || aiCoughNow || fallbackAudioCough) {
+        lastCoughTime = currentTime;
+        if (aiCoughNow) {
+            window._pendingAiCoughEvent = null;
         }
-        chokeGraceStartTime = null;
-        chokeSimultaneousDuration = currentTime - chokeSimultaneousStartTime;
-
-        // 🎯 兩者同時持續做滿 5 秒才觸發警報！(嚴格遵守使用者指示，防晃動過敏)
-        if (chokeSimultaneousDuration >= CHOKE_SIMULTANEOUS_TRIGGER_SEC) {
-            if (currentTime - lastChokeAlertTime >= 10.0) {
-                lastChokeAlertTime = currentTime;
-                triggerAlertLevel('L4', '🚨【緊急・劇烈哽噎警報】身體持續前後左右晃動且手部在胸口拍胸持續滿 5 秒！請立即協助！');
-                chokeSimultaneousStartTime = null;
-                chokeSimultaneousDuration = 0.0;
-            }
-        }
-    } else {
-        // 給予 0.6 秒短暫辨識抖動緩衝，若中斷超過 0.6 秒則歸零重計
-        if (chokeSimultaneousStartTime !== null) {
-            if (chokeGraceStartTime === null) {
-                chokeGraceStartTime = currentTime;
-            } else if (currentTime - chokeGraceStartTime > 0.6) {
-                chokeSimultaneousStartTime = null;
-                chokeSimultaneousDuration = 0.0;
-                chokeGraceStartTime = null;
-            }
-        }
-    }
-
-    // 咳嗽狀態追蹤 (僅用於靜默後台紀錄)
-    let coughDetectedThisFrame = visionCough;
-    if (audioEnergy > 0.20) coughDetectedThisFrame = true;
-    if (coughDetectedThisFrame) lastCoughTime = currentTime;
-
-    if (visionCough || audioEnergy > 0.25) {
-        // L1 / L2 合併為「嗆咳」 (靜默後台紀錄：取消劇烈晃動強制綁定，不跳 UI 彈窗、不閃紅橫幅)
+        // 一般咳嗽與警報等級分開：只在背景留下 COUGH 事件，不當作 L1-L4 警報。
         if (currentTime - (window._lastCoughLogTime || 0) >= 3.0) {
             window._lastCoughLogTime = currentTime;
             mealMetrics.coughCount = (mealMetrics.coughCount || 0) + 1;
-            const typeStr = (visionCough && audioEnergy > 0.25) ? "雙流特徵確認" : (visionCough ? "影像頭部急抽動" : "聽覺 YAMNet 咳嗽聲");
-            if (typeof window.recordCoughEvent === 'function') {
-                window.recordCoughEvent(typeStr, "背景靜默紀錄 (無彈窗干擾)");
+            let typeStr = "聽覺 YAMNet 咳嗽聲";
+            let detailStr = "背景靜默紀錄 (無彈窗干擾)";
+            if (visionCough && aiCoughNow) {
+                const pct = Math.min(99, Math.round(pendingAiCough.score * 100));
+                typeStr = `雙模態嗆咳 (影像＋AI${pendingAiCough.labelZh})`;
+                detailStr = `YAMNet 辨識 ${pendingAiCough.labelZh} (${pct}%) ＋ 頭部急抽動 · 靜默紀錄`;
+            } else if (aiCoughNow) {
+                const pct = Math.min(99, Math.round(pendingAiCough.score * 100));
+                typeStr = `AI 聽覺辨識 (${pendingAiCough.labelZh})`;
+                detailStr = `Google YAMNet 聲紋信心度 ${pct}% · 已過濾講話語音 · 靜默紀錄`;
+            } else if (visionCough) {
+                typeStr = "影像頭部急抽動";
+                detailStr = "視覺連續劇烈上下抽動 · 靜默紀錄 (無彈窗干擾)";
+            } else {
+                typeStr = "高能量突發聲響 (備援)";
+                detailStr = "AI 聲學模型未就緒，以高音量門檻備援靜默紀錄";
             }
-            console.log("🤫【靜默後台紀錄】偵測到嗆咳（聲音咳嗽或影像頭部抽動），背景靜默紀錄，無彈窗、不閃紅橫幅。");
+            logAnomalyToSupabase('COUGH', typeStr);
+            if (typeof window.recordCoughEvent === 'function') {
+                window.recordCoughEvent(typeStr, detailStr);
+            }
+            console.log(`🤫【靜默後台紀錄】${typeStr} | ${detailStr}`);
         }
+    }
+
+    // ------------------------------------------------------------------
+    // 🚨 L4 急性哽噎決策邏輯 (漏桶漸進衰減 + 三路徑高特異性臨床觸發)
+    //   - 路徑 A (3.0s): 身體掙扎晃動 ＋ 手部拍胸／抓喉
+    //   - 路徑 B (2.5s): 雙手同時抓喉／撫胸窒息手勢
+    //   - 路徑 C (2.5s): 嗆咳後 8 秒內持續抓喉／撫胸
+    // ------------------------------------------------------------------
+    const recentCoughForL4 = (currentTime - lastCoughTime) <= CHOKE_POST_COUGH_WINDOW_SEC;
+    const l4Candidate = window.ConnectionCore.evaluateL4Candidate({
+        bodyShaking: isBodyShakingContinuous,
+        handInZone: isHandOnChestOrThroat,
+        handsInZone: handsInDangerZoneCount,
+        recentCough: recentCoughForL4
+    });
+    const l4State = chokeDangerAccumulator.update(l4Candidate, currentTime);
+    chokeSimultaneousDuration = l4State.duration;
+    chokeSimultaneousStartTime = l4State.active ? (currentTime - l4State.duration) : null;
+
+    if (l4State.triggered) {
+        if (currentTime - lastChokeAlertTime >= 10.0) {
+            lastChokeAlertTime = currentTime;
+            const reasonText = l4State.reason || '身體掙扎晃動＋手部拍胸／抓喉';
+            triggerAlertLevel(
+                'L4',
+                `🚨【緊急・急性哽噎警報】偵測到「${reasonText}」累計達標（${CHOKE_SIMULTANEOUS_TRIGGER_SEC.toFixed(1)} 秒門檻）！請立即協助！`
+            );
+        }
+        chokeDangerAccumulator.reset();
+        chokeSimultaneousStartTime = null;
+        chokeSimultaneousDuration = 0.0;
     }
 
     // 更新 HUD 即時資訊
@@ -957,9 +1334,34 @@ async function processVideoFrame(now) {
 }
 
 // 8. 警報觸發與語音/聲光處理
-function triggerAlertLevel(level, msg) {
+function showChokeVisibilityWarning(msg, eventType = 'L3_VISIBILITY') {
+    const update = window.ConnectionCore.resolveVisibilityAlert(
+        activeAlertLevel,
+        activeAlertBaseMessage,
+        activeAlertMessage,
+        msg,
+        eventType
+    );
+    if (update.replacePrimary) {
+        triggerAlertLevel(update.level, update.message, {
+            countAsChoking: update.countAsChoking,
+            eventType: update.eventType
+        });
+        return;
+    }
+
+    activeAlertBaseMessage = update.baseMessage;
+    activeAlertMessage = update.message;
+    showAlertOverlay(update.level, update.message);
+    logAnomalyToSupabase(update.eventType, msg);
+}
+
+function triggerAlertLevel(level, msg, options = {}) {
     if (activeAlertLevel === level) return;
+    if (!window.ConnectionCore.canReplaceAlertLevel(activeAlertLevel, level)) return;
     activeAlertLevel = level;
+    activeAlertBaseMessage = msg;
+    activeAlertMessage = msg;
 
     console.log(`[ALERT TRIGGERED] ${level}: ${msg}`);
 
@@ -973,17 +1375,17 @@ function triggerAlertLevel(level, msg) {
     if (level === 'L1') {
         speakVoicePrompt("請記得嚼一嚼吞下來喔");
         mealMetrics.pouchingEvents++;
+        logAnomalyToSupabase('L1', msg);
     }
     // Level 2 / L3 / L4: 彈窗 + 警示音 + 寫入 Supabase
     else {
         showAlertOverlay(level, msg);
         playBuzzerAlarm();
-        if (level === 'L4') mealMetrics.coughCountL2++;
-        if (level === 'L3') mealMetrics.chokingEventsL3++;
+        if (level === 'L3' && options.countAsChoking !== false) mealMetrics.chokingEventsL3++;
         if (level === 'L2') mealMetrics.pouchingEvents++;
 
         // 紀錄日誌至 Supabase
-        logAnomalyToSupabase(level, msg);
+        logAnomalyToSupabase(options.eventType || level, msg);
     }
 }
 
@@ -1017,7 +1419,7 @@ function showAlertOverlay(level, msg) {
     const title = document.getElementById('alert-title');
     const desc = document.getElementById('alert-desc');
 
-    title.innerText = level === 'L4' ? '🚨 L4 急性哽噎緊急警報' : (level === 'L2' ? '🔴 L2 嚴重卡喉發呆警報' : '⚠️ L3 吞嚥前少咀嚼預警');
+    title.innerText = level === 'L4' ? '🚨 L4 急性哽噎緊急警報' : (level === 'L2' ? '🔴 L2 嚴重卡喉發呆警報' : '⚠️ L3 需注意警示');
     desc.innerText = msg;
     overlay.classList.remove('hidden');
 }
@@ -1026,6 +1428,8 @@ function dismissAlertOverlay() {
     document.getElementById('alert-overlay').classList.add('hidden');
     stopBuzzerSound();
     activeAlertLevel = null;
+    activeAlertMessage = null;
+    activeAlertBaseMessage = null;
 }
 
 function playBuzzerAlarm() {
@@ -1071,15 +1475,24 @@ function updateRiskBadge() {
 
 // 9. Supabase 日誌紀錄與動態基準更新
 async function logAnomalyToSupabase(level, msg) {
-    const sessionId = mealSessionTracker.currentId;
-    if (!supabaseClient || !sessionId) return;
+    if (!supabaseClient || !isMealActive) return;
+    const sessionInsertPromise = currentMealSessionInsertPromise;
+    const eventMetrics = {
+        jaw_velocity: parseFloat(mealMetrics.jawVelocity.toFixed(2)),
+        audio_energy: 0.0,
+        hands_on_neck: isHandOnNeck
+    };
+    let sessionId = mealSessionTracker.currentId;
+    if (!sessionId) {
+        try { sessionId = await sessionInsertPromise; }
+        catch (e) { return; }
+    }
+    if (!sessionId || !supabaseClient) return;
     try {
         await supabaseClient.from('anomaly_logs').insert([{
             session_id: sessionId,
             event_type: level,
-            jaw_velocity: parseFloat(mealMetrics.jawVelocity.toFixed(2)),
-            audio_energy: 0.0,
-            hands_on_neck: isHandOnNeck,
+            ...eventMetrics,
             details: msg
         }]);
     } catch (e) {
@@ -1271,6 +1684,7 @@ async function broadcastSystemState(force = false, sessionEnded = false) {
                 pouchingEvents: mealMetrics.pouchingEvents,
                 coughEvents: (mealMetrics.coughCount || 0) + (mealMetrics.coughCountL2 || 0),
                 activeAlertLevel: sessionEnded ? null : activeAlertLevel,
+                activeAlertMessage: sessionEnded ? null : activeAlertMessage,
                 isHandOnNeck: isHandOnNeck,
                 sessionEnded
             }
@@ -1284,65 +1698,74 @@ async function broadcastSystemState(force = false, sessionEnded = false) {
 // 獨立核心偵測演算法模組 (Ported from Standalone Detection Core Module)
 // =============================================================================
 
-// 1. 手抓喉嚨與胸口拍胸手勢偵測 (Choke Gesture & Chest Patting Detection)
-function estimateThroat(nose, chin, extend = 0.5) {
+// 1. 手抓喉嚨與胸口拍胸手勢偵測 (與視覺疊圖 100% 共用同一組像素圓心與半徑)
+function estimateThroat(nose, chin, extend = 0.50) {
     const tx = chin.x + extend * (chin.x - nose.x);
     const ty = chin.y + extend * (chin.y - nose.y);
     return { x: tx, y: ty };
 }
 
-function estimateChest(nose, chin, extend = 1.35) {
+function estimateChest(nose, chin, extend = 1.15) {
     const cx = chin.x + extend * (chin.x - nose.x);
     const cy = chin.y + extend * (chin.y - nose.y);
     return { x: cx, y: cy };
 }
 
-function handNearChestOrThroat(hands, nose, chin, w, h) {
-    if (!hands || hands.length === 0) {
-        return { near: false, isChest: false, isThroat: false, chestCenter: null, chestRadius: 0, throatCenter: null, throatRadius: 0 };
-    }
+function getDangerZoneGeometry(nose, chin, w, h) {
     const faceV = Math.hypot((chin.x - nose.x) * w, (chin.y - nose.y) * h);
-    
-    // 喉嚨圈 (半徑約 0.50 倍臉長)
-    const throat = estimateThroat(nose, chin, 0.5);
-    const throatR = Math.max(faceV * 0.50, 15.0);
-    
-    // 胸口區域 (下巴往下延伸 1.25 倍臉長，半徑 0.85 倍臉長，覆蓋胸前拍胸區域)
-    const chest = estimateChest(nose, chin, 1.25);
-    const chestR = Math.max(faceV * 0.85, 30.0);
+    const throat = estimateThroat(nose, chin, 0.50);
+    const chest = estimateChest(nose, chin, 1.15);
+    return {
+        faceV,
+        throatCenter: { x: throat.x * w, y: throat.y * h },
+        throatRadius: Math.max(faceV * 0.65, 22.0),
+        chestCenter: { x: chest.x * w, y: chest.y * h },
+        chestRadius: Math.max(faceV * 1.15, 40.0)
+    };
+}
 
+function handNearChestOrThroat(hands, nose, chin, w, h, minPts = 2) {
+    if (!nose || !chin) {
+        return { near: false, isChest: false, isThroat: false, handsInZone: 0, chestCenter: null, chestRadius: 0, throatCenter: null, throatRadius: 0 };
+    }
+    const geom = getDangerZoneGeometry(nose, chin, w, h);
+    if (!hands || hands.length === 0) {
+        return { near: false, isChest: false, isThroat: false, handsInZone: 0, ...geom };
+    }
+
+    const reqPts = Math.max(1, Math.floor(Number(minPts) || 2));
     let isThroat = false;
     let isChest = false;
+    let handsInZone = 0;
 
     for (const hand of hands) {
         let ptsInThroat = 0;
         let ptsInChest = 0;
+        let ptsInEither = 0;
         for (const pt of hand) {
             const px = pt.x * w;
             const py = pt.y * h;
-            
-            const distThroat = Math.hypot(px - throat.x * w, py - throat.y * h);
-            if (distThroat < throatR) ptsInThroat++;
 
-            const distChest = Math.hypot(px - chest.x * w, py - chest.y * h);
-            if (distChest < chestR) ptsInChest++;
+            const inThroat = Math.hypot(px - geom.throatCenter.x, py - geom.throatCenter.y) < geom.throatRadius;
+            const inChest = Math.hypot(px - geom.chestCenter.x, py - geom.chestCenter.y) < geom.chestRadius;
+            if (inThroat) ptsInThroat++;
+            if (inChest) ptsInChest++;
+            if (inThroat || inChest) ptsInEither++;
         }
-        // 至少 2 個手部關節點進入感應圈，方視為有效撫胸/抓喉（排除單根指尖掠過誤判）
-        if (ptsInThroat >= 2) isThroat = true;
-        if (ptsInChest >= 2) isChest = true;
+        if (ptsInThroat >= reqPts) isThroat = true;
+        if (ptsInChest >= reqPts) isChest = true;
+        if (ptsInEither >= reqPts) handsInZone++;
     }
     return {
-        near: (isThroat || isChest),
-        isChest: isChest,
-        isThroat: isThroat,
-        chestCenter: { x: chest.x * w, y: chest.y * h },
-        chestRadius: chestR,
-        throatCenter: { x: throat.x * w, y: throat.y * h },
-        throatRadius: throatR
+        near: Boolean(isThroat || isChest || handsInZone > 0),
+        isChest,
+        isThroat,
+        handsInZone,
+        ...geom
     };
 }
 
-// 2. 身體持續前後左右晃動分析 (嚴格過濾日常微小擺動、咀嚼與正常進食姿態)
+// 2. 身體持續掙扎晃動分析 (支援低幀率手機裝置，放寬至自然痛苦掙扎/俯仰幅度，同時過濾靜態微晃)
 function checkContinuousBodyShaking(nose, faceSize, currentTime, w, h) {
     if (!nose || faceSize <= 0) return false;
 
@@ -1353,12 +1776,17 @@ function checkContinuousBodyShaking(nose, faceSize, currentTime, w, h) {
         time: currentTime
     });
 
-    // 保留最近 1.2 秒內的軌跡 (大約 30-36 幀)
-    while (bodyMotionHistory.length > 0 && (currentTime - bodyMotionHistory[0].time > 1.2)) {
+    // 保留最近 1.4 秒內的軌跡
+    while (bodyMotionHistory.length > 0 && (currentTime - bodyMotionHistory[0].time > 1.4)) {
         bodyMotionHistory.shift();
     }
 
-    if (bodyMotionHistory.length < 10) {
+    // 修正低 FPS 裝置鎖死問題：最少 4 幀且時間跨度 >= 0.45 秒即可評估（5-8 FPS 手機亦能正常觸發）
+    if (bodyMotionHistory.length < 4) {
+        return false;
+    }
+    const windowSpanSec = bodyMotionHistory[bodyMotionHistory.length - 1].time - bodyMotionHistory[0].time;
+    if (windowSpanSec < 0.45) {
         return false;
     }
 
@@ -1366,10 +1794,6 @@ function checkContinuousBodyShaking(nose, faceSize, currentTime, w, h) {
     let minY = 1e9, maxY = -1e9;
     let minSize = 1e9, maxSize = -1e9;
     let totalSpeed = 0.0;
-    let xDirectionReversals = 0;
-    let yDirectionReversals = 0;
-    let prevDx = 0;
-    let prevDy = 0;
 
     for (let i = 0; i < bodyMotionHistory.length; i++) {
         const p = bodyMotionHistory[i];
@@ -1386,28 +1810,26 @@ function checkContinuousBodyShaking(nose, faceSize, currentTime, w, h) {
             const dy = (p.y - prev.y) * h;
             const stepSpeed = Math.hypot(dx, dy) / p.faceSize;
             totalSpeed += stepSpeed;
-
-            if (i > 1) {
-                // 排除小於 3.0 像素的特徵微抖動
-                if (dx * prevDx < 0 && Math.abs(dx) > 3.0) xDirectionReversals++;
-                if (dy * prevDy < 0 && Math.abs(dy) > 3.0) yDirectionReversals++;
-            }
-            prevDx = dx;
-            prevDy = dy;
         }
     }
 
+    const xDirectionReversals = window.ConnectionCore.countDirectionReversals(
+        bodyMotionHistory.map(point => point.x * w), 2.0
+    );
+    const yDirectionReversals = window.ConnectionCore.countDirectionReversals(
+        bodyMotionHistory.map(point => point.y * h), 2.0
+    );
     const xSpan = (maxX - minX) * w / faceSize;
     const ySpan = (maxY - minY) * h / faceSize;
     const sizeSpan = (maxSize - minSize) / faceSize;
 
-    // 判定前後左右劇烈晃動：
-    // - 至少 2 次方向反向來回（Reversals >= 2）
-    // - 左右大幅位移 (xSpan > 0.22) 或 前後/俯仰晃動 (ySpan > 0.20 或 sizeSpan > 0.18)
-    // - 1.2 秒內累計速度達標 (totalSpeed > 2.8)
-    const hasDirectionReversal = (xDirectionReversals >= 2 || yDirectionReversals >= 2);
-    const hasSignificantSpan = (xSpan > 0.22 || ySpan > 0.20 || sizeSpan > 0.18);
-    const hasSustainedSpeed = (totalSpeed > 2.8);
+    // 判定痛苦掙扎晃動／前後俯仰：
+    // - 至少 1 次方向折返或明顯前後俯仰尺度變化 (sizeSpan > 0.14)
+    // - 位移跨度達 0.12 倍臉長以上
+    // - 視窗內累計無因次化速度 > 1.2
+    const hasDirectionReversal = (xDirectionReversals >= 1 || yDirectionReversals >= 1 || sizeSpan > 0.14);
+    const hasSignificantSpan = (xSpan > 0.12 || ySpan > 0.12 || sizeSpan > 0.12);
+    const hasSustainedSpeed = (totalSpeed > 1.2);
 
     return (hasSignificantSpan && hasSustainedSpeed && hasDirectionReversal);
 }
@@ -1586,10 +2008,10 @@ function updateHudStats(stateStr, marVal, jawStdVal, chewCnt, swallowCnt, jawVel
     const elShake = document.getElementById('hud-shake-timer');
     if (elShake) {
         if (simultaneousDuration > 0) {
-            elShake.innerText = `${simultaneousDuration.toFixed(1)}s / 5.0s`;
-            elShake.className = simultaneousDuration >= 3.5 ? 'font-mono text-rose-400 font-bold animate-pulse' : 'font-mono text-amber-400 font-bold';
+            elShake.innerText = `${simultaneousDuration.toFixed(1)}s / ${CHOKE_SIMULTANEOUS_TRIGGER_SEC.toFixed(1)}s`;
+            elShake.className = simultaneousDuration >= 2.0 ? 'font-mono text-rose-400 font-bold animate-pulse' : 'font-mono text-amber-400 font-bold';
         } else {
-            elShake.innerText = '0.0s / 5.0s (正常)';
+            elShake.innerText = `0.0s / ${CHOKE_SIMULTANEOUS_TRIGGER_SEC.toFixed(1)}s (正常)`;
             elShake.className = 'font-mono text-emerald-400';
         }
     }
@@ -1648,10 +2070,11 @@ function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, state
         ctx.lineTo(chin.x * w, chin.y * h);
         ctx.stroke();
 
-        // 3. 繪製 Throat Zone (喉嚨自適應圈圈)
-        const throatX = (chin.x + 0.5 * (chin.x - nose.x)) * w;
-        const throatY = (chin.y + 0.5 * (chin.y - nose.y)) * h;
-        const throatR = Math.max(faceH * 0.55 * w, 15.0);
+        // 3 & 4. 繪製與碰撞判定 100% 同幾何的 Throat Zone 與 Chest Zone
+        const zoneGeom = getDangerZoneGeometry(nose, chin, w, h);
+        const throatX = zoneGeom.throatCenter.x;
+        const throatY = zoneGeom.throatCenter.y;
+        const throatR = zoneGeom.throatRadius;
 
         ctx.strokeStyle = isHandOnNeck ? '#f43f5e' : '#d946ef';
         ctx.lineWidth = isHandOnNeck ? 3.5 : 1.8;
@@ -1663,10 +2086,9 @@ function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, state
         ctx.font = 'bold 11px sans-serif';
         ctx.fillText('Throat Zone (喉嚨)', throatX - 40, throatY - throatR - 5);
 
-        // 🎯 4. 繪製 Chest Zone (胸口拍胸區域圈圈)
-        const chestX = (chin.x + 1.35 * (chin.x - nose.x)) * w;
-        const chestY = (chin.y + 1.35 * (chin.y - nose.y)) * h;
-        const chestR = Math.max(faceH * 1.1 * w, 35.0);
+        const chestX = zoneGeom.chestCenter.x;
+        const chestY = zoneGeom.chestCenter.y;
+        const chestR = zoneGeom.chestRadius;
 
         ctx.strokeStyle = isHandOnChest ? '#f43f5e' : 'rgba(56, 189, 248, 0.7)';
         ctx.lineWidth = isHandOnChest ? 3.5 : 1.8;
@@ -1690,17 +2112,18 @@ function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, state
             ctx.fillText('SWALLOWING...', 20, h - 30);
         }
 
-        // 🎯 7. 拍胸＋前後左右晃動 5 秒即時倒數 HUD 進度條
+        // 🎯 7. L4 急性哽噎風險累積進度條 (3.0s 門檻 + 漸進衰減)
         if (simultaneousSec > 0) {
             const barW = Math.min(w * 0.85, 340);
             const barH = 34;
             const barX = (w - barW) / 2;
             const barY = 18;
+            const progress = Math.min(1.0, simultaneousSec / CHOKE_SIMULTANEOUS_TRIGGER_SEC);
 
             ctx.save();
             // 背景外框
             ctx.fillStyle = 'rgba(15, 23, 42, 0.94)';
-            ctx.strokeStyle = simultaneousSec >= 4.0 ? '#ef4444' : '#f59e0b';
+            ctx.strokeStyle = progress >= 0.75 ? '#ef4444' : '#f59e0b';
             ctx.lineWidth = 2.5;
             ctx.beginPath();
             if (ctx.roundRect) {
@@ -1714,12 +2137,15 @@ function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, state
             // 倒數文字
             ctx.fillStyle = '#fef08a';
             ctx.font = 'bold 13px sans-serif';
-            ctx.fillText(`⚠️ 拍胸＋前後左右晃動: ${simultaneousSec.toFixed(1)}s / 5.0s`, barX + 16, barY + 20);
+            ctx.fillText(
+                `⚠️ 急性哽噎風險累積: ${simultaneousSec.toFixed(1)}s / ${CHOKE_SIMULTANEOUS_TRIGGER_SEC.toFixed(1)}s`,
+                barX + 16,
+                barY + 20
+            );
 
             // 填滿進度條
-            const progress = Math.min(1.0, simultaneousSec / 5.0);
             const fillW = (barW - 32) * progress;
-            ctx.fillStyle = progress >= 0.8 ? '#ef4444' : '#f59e0b';
+            ctx.fillStyle = progress >= 0.75 ? '#ef4444' : '#f59e0b';
             ctx.fillRect(barX + 16, barY + 28, fillW, 8);
             ctx.restore();
         }
