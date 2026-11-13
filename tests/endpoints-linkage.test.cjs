@@ -155,7 +155,13 @@ test('anomaly logger waits for the active meal insert before attaching an event'
     isMealActive: true,
     supabaseClient: { from(table) {
       assert.equal(table, 'anomaly_logs');
-      return { insert: async rows => { inserts.push(rows[0]); return { error: null }; } };
+      return { insert: rows => {
+        inserts.push(rows[0]);
+        return { select: columns => {
+          assert.equal(columns, 'id');
+          return { single: async () => ({ data: { id: 'event-l4-id' }, error: null }) };
+        } };
+      } };
     } },
     mealMetrics: { jawVelocity: 3.25 },
     isHandOnNeck: false,
@@ -167,12 +173,66 @@ test('anomaly logger waits for the active meal insert before attaching an event'
   context.isHandOnNeck = true;
   resolveSession('meal-current');
   context.mealSessionTracker.currentId = 'meal-current';
-  await write;
+  const eventId = await write;
+  assert.equal(eventId, 'event-l4-id');
   assert.equal(inserts.length, 1);
   assert.equal(inserts[0].session_id, 'meal-current');
   assert.equal(inserts[0].event_type, 'COUGH');
   assert.equal(inserts[0].jaw_velocity, 3.25);
   assert.equal(inserts[0].hands_on_neck, false);
+});
+
+test('patient frame loop feeds visible chew activity into the pause timer and resets it by session', () => {
+  assert.match(patientJs, /const jawStillnessTracker = window\.ConnectionCore\.createChewingPauseTracker\(\)/);
+  assert.match(patientJs, /jawChewingDetected\s*=\s*currentState === ST_CHEW/);
+  assert.match(patientJs, /mealMetrics\.jawStillTime\s*=\s*jawStillnessTracker\.update\(\{[\s\S]*?active:\s*isMealActive[\s\S]*?faceVisible:\s*Boolean\(faceLandmarks\)[\s\S]*?chewingDetected:\s*jawChewingDetected[\s\S]*?currentTime[\s\S]*?\}\)/);
+  const startAt = patientJs.indexOf('async function startMealSession() {');
+  const startEndAt = patientJs.indexOf('async function endMealSession()', startAt);
+  const endAt = patientJs.indexOf('async function endMealSession() {');
+  const endEndAt = patientJs.indexOf('\\nfunction ', endAt + 1);
+  const endResetAt = patientJs.indexOf('mealMetrics.jawStillTime = 0;', endAt);
+  assert.ok(endAt >= 0 && endResetAt > endAt, 'meal-end timer reset location must exist');
+  assert.ok(patientJs.slice(endAt, endResetAt).includes('jawStillnessTracker.reset()'));
+  assert.ok(patientJs.slice(startAt, startEndAt).includes('jawStillnessTracker.reset()'));
+
+});
+
+test('patient endpoint defines the L4 email queue helper exactly once', () => {
+  assert.equal((patientJs.match(/function queueL4EmailNotification\(/g) || []).length, 1);
+});
+
+test('L4 email notification waits for persisted event ID and does not send for other levels', async () => {
+  const startAt = patientJs.indexOf('function queueL4EmailNotification(');
+  const endAt = patientJs.indexOf('function triggerAlertLevel(', startAt);
+  assert.ok(startAt >= 0 && endAt > startAt, 'L4 email notification helper must exist');
+  assert.match(patientJs, /queueL4EmailNotification\(eventType,\s*eventLogPromise\)/);
+  assert.ok(patientJs.includes("if (level === 'L4' && eventType === 'L4') {"));
+  const source = patientJs.slice(startAt, endAt) + '\nglobalThis.testQueueL4Email = queueL4EmailNotification;';
+  const calls = [];
+  const context = {
+    supabaseClient: { functions: { invoke: async (name, options) => {
+      calls.push({ name, eventId: options.body.eventId });
+      return { error: null };
+    } } },
+    console: { warn() {} }
+  };
+  vm.runInNewContext(source, context);
+
+  await context.testQueueL4Email('L1', Promise.resolve('event-non-l4'));
+  assert.equal(calls.length, 0);
+
+  let resolveEventId;
+  const pendingEvent = new Promise(resolve => { resolveEventId = resolve; });
+  const queued = context.testQueueL4Email('L4', pendingEvent);
+  assert.equal(calls.length, 0, 'email must wait until the anomaly row is persisted');
+  resolveEventId('event-l4-id');
+  await queued;
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].name, 'notify-l4-email');
+  assert.equal(calls[0].eventId, 'event-l4-id');
+
+  await context.testQueueL4Email('L4', Promise.resolve(null));
+  assert.equal(calls.length, 1, 'missing persisted event ID must not send an email');
 });
 
 test('patient meal persists swallow count and marks the new event schema version', () => {

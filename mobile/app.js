@@ -78,6 +78,8 @@ if (window.ConnectionCore && typeof window.ConnectionCore.purgeLegacySharedPatie
 }
 const mealSessionTracker = window.ConnectionCore.createMealSessionTracker();
 const mealStartLock = window.ConnectionCore.createStartLock();
+const jawStillnessTracker = window.ConnectionCore.createChewingPauseTracker();
+const l1PauseReminderGate = window.ConnectionCore.createThresholdCrossingGate();
 let currentMealSessionInsertPromise = Promise.resolve(null);
 
 // 原版防哽咽狀態機常數與狀態 (ST_IDLE, ST_INGEST, ST_CHEW, ST_SWALLOW, ST_CHECK)
@@ -1055,6 +1057,15 @@ async function startMealSession() {
         return;
     }
     chokeFaceLossWarningGuard.reset();
+    jawStillnessTracker.reset();
+    l1PauseReminderGate.reset();
+    currentState = ST_IDLE;
+    stateStartTime = performance.now() / 1000.0;
+    prevJawY = null;
+    jawMovementHistory = [];
+    marSmooth = null;
+    jawSmooth = null;
+    lastChewFlipTime = 0.0;
     chokeDangerAccumulator.reset();
     lastChokeVisibilityWarningAt = -Infinity;
     lastCoughTime = -Infinity;
@@ -1192,6 +1203,9 @@ async function endMealSession() {
     let avgChewTime = currentPatient.baseline_chew;
     try {
         isMealActive = false;
+        jawStillnessTracker.reset();
+        l1PauseReminderGate.reset();
+        mealMetrics.jawStillTime = 0;
 
         // 計算總用餐時長與平均咀嚼時間
         const endTime = new Date();
@@ -1569,6 +1583,7 @@ async function processVideoFrame(now) {
     let movementStd = 0.0;
     let mar = 0.0;
     let visionCough = false;
+    let jawChewingDetected = false;
     let bodyShaking = false;
     const w = aiCanvas.width;
     const h = aiCanvas.height;
@@ -1616,6 +1631,9 @@ async function processVideoFrame(now) {
             const variance = slice.reduce((a,b)=>a + Math.pow(b - avg, 2), 0) / slice.length;
             movementStd = Math.sqrt(variance);
         }
+        jawChewingDetected = currentState === ST_CHEW
+            && movementStd > 2.0
+            && Math.abs(mealMetrics.jawVelocity) > 1.5;
 
         // 快取錨點供低頭/臉短暫消失時手勢續用 (2.0s 快取)
         lastNose = { x: nose.x, y: nose.y };
@@ -1665,7 +1683,7 @@ async function processVideoFrame(now) {
             }
         } else if (currentState === ST_CHEW) {
             // 方向反轉咀嚼計數 (d1 * d2 < 0 且 間隔 > 0.18s)
-            if (movementStd > 2.0 && Math.abs(mealMetrics.jawVelocity) > 1.5) {
+            if (jawChewingDetected) {
                 if (jawMovementHistory.length >= 3) {
                     const d1 = jawMovementHistory[jawMovementHistory.length - 1] - jawMovementHistory[jawMovementHistory.length - 2];
                     const d2 = jawMovementHistory[jawMovementHistory.length - 2] - jawMovementHistory[jawMovementHistory.length - 3];
@@ -1776,6 +1794,13 @@ async function processVideoFrame(now) {
         drawOriginalDetectionOverlay(aiCtx, null, handLandmarks, w, h, currentState, 0, 0, mealMetrics.totalChews, isHandOnNeck, isHandOnChest, isBodyShakingContinuous, chokeSimultaneousDuration);
     }
 
+    mealMetrics.jawStillTime = jawStillnessTracker.update({
+        active: isMealActive,
+        faceVisible: Boolean(faceLandmarks),
+        chewingDetected: jawChewingDetected,
+        currentTime
+    });
+
     // 咳嗽狀態追蹤 (結合 Google YAMNet AI 咳嗽聲紋 ＋ 影像頭部急抽動；同幀嗆咳立即賦能路徑 C)
     const pendingAiCough = (window._pendingAiCoughEvent && (currentTime - window._pendingAiCoughEvent.time) <= 1.2)
         ? window._pendingAiCoughEvent
@@ -1852,7 +1877,7 @@ async function processVideoFrame(now) {
     updateHudStats(currentState, mar, movementStd, mealMetrics.totalChews, mealMetrics.swallowCount || 0, mealMetrics.jawVelocity, evidenceFusion.score(), chokeSimultaneousDuration);
     
     // Level 1: 10秒 含飯發呆溫和提醒
-    if (mealMetrics.jawStillTime >= CONFIG.BASELINES.POUCHING_HINT_SEC && mealMetrics.jawStillTime < (CONFIG.BASELINES.POUCHING_HINT_SEC + 0.5)) {
+    if (l1PauseReminderGate.update(mealMetrics.jawStillTime, CONFIG.BASELINES.POUCHING_HINT_SEC)) {
         triggerAlertLevel('L1', '🟡 含飯/發呆提醒：長者已靜止 10 秒未咀嚼');
     }
 
@@ -1885,6 +1910,24 @@ function showChokeVisibilityWarning(msg, eventType = 'L3_VISIBILITY') {
     logAnomalyToSupabase(update.eventType, msg);
 }
 
+function queueL4EmailNotification(eventType, eventLogPromise) {
+    if (eventType !== 'L4') return Promise.resolve(false);
+    return Promise.resolve(eventLogPromise).then(async eventId => {
+        if (!eventId || !supabaseClient?.functions?.invoke) return false;
+        const { error } = await supabaseClient.functions.invoke('notify-l4-email', {
+            body: { eventId }
+        });
+        if (error) {
+            console.warn('[Email] L4 owner notification failed:', error.message || 'unknown error');
+            return false;
+        }
+        return true;
+    }).catch(error => {
+        console.warn('[Email] L4 owner notification failed:', error?.message || 'unknown error');
+        return false;
+    });
+}
+
 function triggerAlertLevel(level, msg, options = {}) {
     if (activeAlertLevel === level) return;
     if (!window.ConnectionCore.canReplaceAlertLevel(activeAlertLevel, level)) return;
@@ -1913,8 +1956,12 @@ function triggerAlertLevel(level, msg, options = {}) {
         if (level === 'L3' && options.countAsChoking !== false) mealMetrics.chokingEventsL3++;
         if (level === 'L2') mealMetrics.pouchingEvents++;
 
-        // 紀錄日誌至 Supabase
-        logAnomalyToSupabase(options.eventType || level, msg);
+        // 紀錄日誌至 Supabase；新 L4 紀錄完成後再背景寄送 Email，不阻塞彈窗／即時警報。
+        const eventType = options.eventType || level;
+        const eventLogPromise = logAnomalyToSupabase(eventType, msg);
+        if (level === 'L4' && eventType === 'L4') {
+            void queueL4EmailNotification(eventType, eventLogPromise);
+        }
     }
 }
 
@@ -2004,7 +2051,7 @@ function updateRiskBadge() {
 
 // 9. Supabase 日誌紀錄與動態基準更新
 async function logAnomalyToSupabase(level, msg) {
-    if (!supabaseClient || !isMealActive) return;
+    if (!supabaseClient || !isMealActive) return null;
     const sessionInsertPromise = currentMealSessionInsertPromise;
     const eventMetrics = {
         jaw_velocity: parseFloat(mealMetrics.jawVelocity.toFixed(2)),
@@ -2014,18 +2061,21 @@ async function logAnomalyToSupabase(level, msg) {
     let sessionId = mealSessionTracker.currentId;
     if (!sessionId) {
         try { sessionId = await sessionInsertPromise; }
-        catch (e) { return; }
+        catch (e) { return null; }
     }
-    if (!sessionId || !supabaseClient) return;
+    if (!sessionId || !supabaseClient) return null;
     try {
-        await supabaseClient.from('anomaly_logs').insert([{
+        const { data, error } = await supabaseClient.from('anomaly_logs').insert([{
             session_id: sessionId,
             event_type: level,
             ...eventMetrics,
             details: msg
-        }]);
+        }]).select('id').single();
+        if (error) throw error;
+        return data?.id || null;
     } catch (e) {
         console.warn('[Supabase] Anomaly log bypassed:', e);
+        return null;
     }
 }
 

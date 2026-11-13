@@ -290,6 +290,75 @@
         });
     }
 
+    function createThresholdCrossingGate() {
+        let triggered = false;
+        return Object.freeze({
+            update(value, threshold) {
+                const current = Number(value);
+                const limit = Number(threshold);
+                if (!Number.isFinite(current) || !Number.isFinite(limit)) return false;
+                if (current < limit) {
+                    triggered = false;
+                    return false;
+                }
+                if (triggered) return false;
+                triggered = true;
+                return true;
+            },
+            reset() {
+                triggered = false;
+            }
+        });
+    }
+
+    function createChewingPauseTracker() {
+        // Brief frame jitter is tolerated; longer gaps are treated as unobserved time.
+        const maxObservedFrameGapSec = 0.4;
+        let chewingObserved = false;
+        let elapsedSec = 0;
+        let lastUpdateTime = null;
+        let previousFrameFaceVisible = false;
+
+        function reset() {
+            chewingObserved = false;
+            elapsedSec = 0;
+            lastUpdateTime = null;
+            previousFrameFaceVisible = false;
+        }
+
+        return Object.freeze({
+            update({ active, faceVisible, chewingDetected, currentTime } = {}) {
+                const now = Number(currentTime);
+                if (!active || !Number.isFinite(now)) {
+                    reset();
+                    return 0;
+                }
+                if (lastUpdateTime !== null && now < lastUpdateTime) return elapsedSec;
+
+                if (!faceVisible) {
+                    lastUpdateTime = now;
+                    previousFrameFaceVisible = false;
+                    return elapsedSec;
+                }
+
+                if (chewingDetected) {
+                    chewingObserved = true;
+                    elapsedSec = 0;
+                } else if (chewingObserved && previousFrameFaceVisible && lastUpdateTime !== null) {
+                    const observedGapSec = now - lastUpdateTime;
+                    if (observedGapSec <= maxObservedFrameGapSec) {
+                        elapsedSec += Math.max(0, observedGapSec);
+                    }
+                }
+
+                lastUpdateTime = now;
+                previousFrameFaceVisible = true;
+                return elapsedSec;
+            },
+            reset
+        });
+    }
+
     function latestSessionsChronological(sessions, limit = 7) {
         const items = Array.isArray(sessions) ? sessions.slice() : [];
         const count = Math.max(0, Math.floor(Number(limit) || 0));
@@ -489,5 +558,5 @@
         purgeLegacySharedPatientKeys(storage);
     }
 
-    return Object.freeze({ channelTopic, privateChannelOptions, createCandidateBuffer, takeMatchingCandidates, canReplaceAlertLevel, resolveVisibilityAlert, createFaceLossWarningGuard, countDirectionReversals, evaluateL4Candidate, createChokeDangerAccumulator, latestSessionsChronological, stopMediaStream, finalizeMealSession, createMealSessionTracker, summarizeMealEventsBySession, createStartLock, createNegotiationGate, coughStorageKey, kioskLockStorageKey, nextPatientCode, purgeLegacySharedPatientKeys, purgeAllLocalPatientKeys });
+    return Object.freeze({ channelTopic, privateChannelOptions, createCandidateBuffer, takeMatchingCandidates, canReplaceAlertLevel, resolveVisibilityAlert, createFaceLossWarningGuard, countDirectionReversals, evaluateL4Candidate, createChokeDangerAccumulator, createChewingPauseTracker, createThresholdCrossingGate, latestSessionsChronological, stopMediaStream, finalizeMealSession, createMealSessionTracker, summarizeMealEventsBySession, createStartLock, createNegotiationGate, coughStorageKey, kioskLockStorageKey, nextPatientCode, purgeLegacySharedPatientKeys, purgeAllLocalPatientKeys });
 });

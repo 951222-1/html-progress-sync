@@ -62,6 +62,52 @@ test('negotiation gate serializes different offers so they cannot replace a live
   assert.equal(maxActive, 1);
 });
 
+test('chewing-pause timer starts after detected chewing and continues across non-chewing states', () => {
+  const tracker = ConnectionCore.createChewingPauseTracker();
+  assert.equal(tracker.update({ active: true, faceVisible: true, chewingDetected: false, currentTime: 1 }), 0);
+  assert.equal(tracker.update({ active: true, faceVisible: true, chewingDetected: true, currentTime: 2 }), 0);
+  assert.equal(tracker.update({ active: true, faceVisible: true, chewingDetected: false, currentTime: 2.25 }), 0.25);
+  assert.equal(tracker.update({ active: true, faceVisible: true, chewingDetected: false, currentTime: 2.5 }), 0.5);
+  assert.equal(tracker.update({ active: true, faceVisible: true, chewingDetected: false, currentTime: 2.75 }), 0.75);
+  assert.equal(tracker.update({ active: true, faceVisible: true, chewingDetected: true, currentTime: 3 }), 0);
+});
+
+test('chewing-pause timer freezes during face loss and resumes without counting the hidden gap', () => {
+  const tracker = ConnectionCore.createChewingPauseTracker();
+  tracker.update({ active: true, faceVisible: true, chewingDetected: true, currentTime: 1 });
+  assert.equal(tracker.update({ active: true, faceVisible: true, chewingDetected: false, currentTime: 1.25 }), 0.25);
+  assert.equal(tracker.update({ active: true, faceVisible: false, chewingDetected: false, currentTime: 1.5 }), 0.25);
+  assert.equal(tracker.update({ active: true, faceVisible: true, chewingDetected: false, currentTime: 9.5 }), 0.25);
+  assert.equal(tracker.update({ active: true, faceVisible: true, chewingDetected: false, currentTime: 9.75 }), 0.5);
+});
+
+test('chewing-pause timer ignores long visible-frame gaps instead of treating them as observed stillness', () => {
+  const tracker = ConnectionCore.createChewingPauseTracker();
+  tracker.update({ active: true, faceVisible: true, chewingDetected: true, currentTime: 1.0 });
+  assert.equal(tracker.update({ active: true, faceVisible: true, chewingDetected: false, currentTime: 1.25 }), 0.25);
+  assert.equal(tracker.update({ active: true, faceVisible: true, chewingDetected: false, currentTime: 1.75 }), 0.25);
+  assert.equal(tracker.update({ active: true, faceVisible: true, chewingDetected: false, currentTime: 2.0 }), 0.5);
+});
+
+test('chewing-pause timer resets at meal end and ignores backwards timestamps', () => {
+  const tracker = ConnectionCore.createChewingPauseTracker();
+  tracker.update({ active: true, faceVisible: true, chewingDetected: true, currentTime: 2 });
+  assert.equal(tracker.update({ active: true, faceVisible: true, chewingDetected: false, currentTime: 2.25 }), 0.25);
+  assert.equal(tracker.update({ active: true, faceVisible: true, chewingDetected: false, currentTime: 2.5 }), 0.5);
+  assert.equal(tracker.update({ active: true, faceVisible: true, chewingDetected: false, currentTime: 2.0 }), 0.5);
+  assert.equal(tracker.update({ active: false, faceVisible: true, chewingDetected: false, currentTime: 3.0 }), 0);
+  assert.equal(tracker.update({ active: true, faceVisible: true, chewingDetected: false, currentTime: 3.25 }), 0);
+});
+
+test('pause reminder gate fires once on threshold crossing and re-arms after a reset', () => {
+  const gate = ConnectionCore.createThresholdCrossingGate();
+  assert.equal(gate.update(9.9, 10), false);
+  assert.equal(gate.update(10.7, 10), true, 'must catch a frame that jumps over the threshold window');
+  assert.equal(gate.update(11.2, 10), false, 'must not repeat during the same pause');
+  assert.equal(gate.update(0, 10), false, 'falling below threshold re-arms without alerting');
+  assert.equal(gate.update(10.1, 10), true, 'a new pause may alert once again');
+});
+
 test('alert priority prevents a visibility warning from replacing an active equal or higher alert', () => {
   assert.equal(ConnectionCore.canReplaceAlertLevel(null, 'L3'), true);
   assert.equal(ConnectionCore.canReplaceAlertLevel('L1', 'L3'), true);
