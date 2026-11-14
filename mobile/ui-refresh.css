@@ -226,6 +226,91 @@ html[data-ui-theme="milktea"] footer {
   border-color: var(--milk-border) !important;
 }
 
+.ui-recording-connect { margin-bottom: .25rem; }
+.ui-recording-note {
+  margin: 0;
+  color: var(--milk-muted);
+  font-size: .82rem;
+  line-height: 1.45;
+}
+.ui-recording-connect-button,
+.ui-recording-secondary-button {
+  min-height: 44px;
+  padding: .55rem .9rem;
+  color: #fff;
+  background: var(--milk-accent);
+  border: 1px solid var(--milk-accent);
+  border-radius: .75rem;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ui-recording-connect-button:hover,
+.ui-recording-secondary-button:hover { background: var(--milk-accent-hover); }
+.ui-recording-connect-button:disabled,
+.ui-recording-secondary-button:disabled { opacity: .6; cursor: wait; }
+.ui-recording-status {
+  box-sizing: border-box;
+  width: min(calc(100% - 2rem), 50rem);
+  margin: .5rem auto;
+  padding: .75rem 1rem;
+  color: var(--milk-ink);
+  background: var(--milk-surface);
+  border: 1px solid var(--milk-border);
+  border-radius: .85rem;
+  box-shadow: var(--milk-shadow);
+  font-size: .85rem;
+  line-height: 1.45;
+}
+.ui-recording-panel {
+  box-sizing: border-box;
+  width: min(calc(100% - 2rem), 80rem);
+  margin: 0 auto;
+  padding-bottom: 1.5rem;
+}
+.ui-recording-panel-card {
+  padding: clamp(1rem, 2vw, 1.5rem);
+  color: var(--milk-ink);
+  background: var(--milk-surface);
+  border: 1px solid var(--milk-border);
+  border-radius: 1.35rem;
+  box-shadow: var(--milk-shadow);
+}
+.ui-recording-panel-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .8rem;
+  margin-bottom: 1rem;
+}
+.ui-recording-panel-header h2 { margin: 0 0 .25rem; font-size: 1.2rem; font-weight: 750; color: var(--milk-ink); }
+.ui-recording-panel-header p { margin: 0; color: var(--milk-muted); font-size: .85rem; line-height: 1.5; }
+.ui-recording-consent {
+  display: flex;
+  align-items: flex-start;
+  gap: .75rem;
+  margin: 1rem 0;
+  padding: 1rem;
+  color: var(--milk-ink);
+  background: var(--milk-surface-soft);
+  border: 1px solid var(--milk-border);
+  border-radius: 1rem;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.ui-recording-consent input { flex: 0 0 auto; width: 1.25rem; height: 1.25rem; margin-top: .1rem; accent-color: var(--milk-accent); }
+.ui-recording-consent strong { color: var(--milk-accent); }
+.ui-recording-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 19rem), 1fr)); gap: .75rem; }
+.ui-recording-list article { padding: 1rem; color: var(--milk-ink); background: var(--milk-surface-soft); border: 1px solid var(--milk-border); border-radius: 1rem; }
+.ui-recording-list article p { color: var(--milk-muted) !important; }
+.ui-recording-empty { margin: .75rem 0; padding: 1rem; color: var(--milk-muted); background: var(--milk-surface-soft); border: 1px dashed var(--milk-border); border-radius: .9rem; }
+.ui-recording-player-area { margin-top: 1.25rem; padding-top: 1rem; border-top: 1px solid var(--milk-border); }
+.ui-recording-player-area h3 { margin: 0 0 .75rem; color: var(--milk-ink); font-size: 1rem; font-weight: 700; }
+.ui-recording-player-area video { width: 100%; max-height: 60vh; background: #181614; border-radius: 1rem; }
+.ui-recording-marks { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: .75rem; }
+.ui-recording-marks button { min-height: 44px; color: var(--milk-accent) !important; background: var(--milk-surface-soft) !important; border-color: var(--milk-border) !important; }
+
 @media (max-width: 480px) {
   .ui-refresh-toolbar {
     width: calc(100% - 1.25rem);

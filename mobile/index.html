@@ -73,6 +73,15 @@
         </div>
     </section>
 
+    <section id="local-recording-connect-panel" class="ui-refresh-toolbar ui-refresh-toolbar--patient ui-recording-connect" aria-label="本機錄影連線">
+        <div class="ui-refresh-clock">
+            <p class="ui-refresh-greeting">本機整餐無聲錄影</p>
+            <p id="local-recording-connect-status" class="ui-recording-note">影片與同意狀態只留在這台電腦；GitHub Pages 需啟動本機服務並允許本機網路存取。</p>
+        </div>
+        <button id="local-recording-connect" type="button" class="ui-recording-connect-button">連接本機服務</button>
+    </section>
+    <p id="local-recording-status" hidden role="status" aria-live="polite" class="ui-recording-status"></p>
+
     <!-- 主要相機與 AI 監測內容區 -->
     <main class="flex-1 max-w-md w-full mx-auto p-4 flex flex-col justify-center space-y-4">
 
@@ -316,6 +325,10 @@
         </div>
     </div>
 
+    <script src="../local_recording/meal-recording.js?v=localrec-1"></script>
+    <script src="../local_recording/local-recording-ui.js?v=localrec-1"></script>
+    <script src="../local_recording/local-recording-panel.js?v=localrec-1"></script>
+    <script src="../local_recording/bridge.js?v=localrec-1"></script>
     <script src="ui-refresh.js"></script>
 </body>
 </html>
