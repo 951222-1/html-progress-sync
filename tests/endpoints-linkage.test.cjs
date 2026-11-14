@@ -31,7 +31,7 @@ test('L3 alert title does not mislabel face-visibility warnings as low-chew aler
 });
 
 test('patient and caregiver scripts use one release-specific cache-bust version', () => {
-  const versions = page => [...page.matchAll(/<script src="[^"]+\.js\?v=([^"]+)"/g)].map(match => match[1]);
+  const versions = page => [...page.matchAll(/<script src="(?!\.\.\/local_recording\/)[^"]+\.js\?v=([^"]+)"/g)].map(match => match[1]);
   const patientVersions = versions(patientPage);
   const caregiverVersions = versions(caregiverPage);
   assert.equal(patientVersions.length, 4);
@@ -40,6 +40,22 @@ test('patient and caregiver scripts use one release-specific cache-bust version'
   assert.equal(new Set(caregiverVersions).size, 1);
   assert.equal(patientVersions[0], caregiverVersions[0]);
   assert.match(patientVersions[0], /^\d{8}_[a-f0-9]{7}$/);
+});
+
+test('Pages patient and caregiver endpoints link the loopback recording companion without replacing auth scripts', () => {
+  for (const page of [patientPage, caregiverPage]) {
+    assert.match(page, /id="local-recording-connect-panel"/);
+    assert.match(page, /id="local-recording-connect"/);
+    assert.match(page, /\.\.\/local_recording\/meal-recording\.js\?v=localrec-1/);
+    assert.match(page, /\.\.\/local_recording\/bridge\.js\?v=localrec-1/);
+    assert.match(page, /ui-refresh\.js/);
+    assert.match(page, /auth-ui\.js/);
+  }
+  for (const id of ['caregiver-alert-banner','btn-toggle-sound','chart-chew-trend','meal-history-list']) {
+    assert.match(caregiverPage,new RegExp(`id="${id}"`));
+  }
+  assert.match(caregiverPage,/id="local-recording-player"/);
+  assert.match(caregiverPage,/本機整餐影片/);
 });
 
 test('both endpoints load shared authentication and private-channel support', () => {
