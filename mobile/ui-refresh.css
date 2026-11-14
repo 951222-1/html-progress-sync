@@ -1,0 +1,251 @@
+/* UI-only milk-tea refresh. Camera pixels, alert colors and detection canvases stay untouched. */
+:root { --ui-font-scale: 1; }
+
+html[data-ui-theme="milktea"] {
+  color-scheme: light;
+  font-size: calc(100% * var(--ui-font-scale, 1));
+  --milk-bg: #f3eee6;
+  --milk-surface: #fffaf3;
+  --milk-surface-soft: #f5ece1;
+  --milk-surface-deep: #e9ddce;
+  --milk-ink: #342d27;
+  --milk-muted: #6d6258;
+  --milk-border: #ded0bf;
+  --milk-accent: #8b5439;
+  --milk-accent-hover: #71432f;
+  --milk-focus: #b8794c;
+  --milk-shadow: 0 12px 32px rgba(72, 50, 31, .09);
+}
+
+html[data-ui-theme="milktea"] body {
+  background-color: var(--milk-bg) !important;
+  color: var(--milk-ink) !important;
+  font-family: system-ui, "Noto Sans TC", "Microsoft JhengHei", sans-serif !important;
+}
+
+html[data-ui-theme="milktea"] body > header {
+  background-color: rgba(237, 226, 211, .98) !important;
+  border-color: var(--milk-border) !important;
+  color: var(--milk-ink) !important;
+  box-shadow: 0 2px 12px rgba(72, 50, 31, .06);
+}
+
+html[data-ui-theme="milktea"] .bg-slate-900,
+html[data-ui-theme="milktea"] .bg-slate-900\/90,
+html[data-ui-theme="milktea"] .bg-slate-900\/80 {
+  background-color: var(--milk-surface) !important;
+}
+html[data-ui-theme="milktea"] .bg-slate-800,
+html[data-ui-theme="milktea"] .bg-slate-800\/80,
+html[data-ui-theme="milktea"] .bg-slate-800\/60,
+html[data-ui-theme="milktea"] .bg-slate-800\/50 {
+  background-color: var(--milk-surface-soft) !important;
+}
+html[data-ui-theme="milktea"] .bg-slate-950 {
+  background-color: var(--milk-surface-deep) !important;
+}
+html[data-ui-theme="milktea"] .border-slate-800,
+html[data-ui-theme="milktea"] .border-slate-700,
+html[data-ui-theme="milktea"] .border-slate-700\/50 {
+  border-color: var(--milk-border) !important;
+}
+html[data-ui-theme="milktea"] .text-slate-100,
+html[data-ui-theme="milktea"] .text-slate-200,
+html[data-ui-theme="milktea"] .text-slate-300 {
+  color: var(--milk-ink) !important;
+}
+html[data-ui-theme="milktea"] .text-slate-400,
+html[data-ui-theme="milktea"] .text-slate-500 {
+  color: var(--milk-muted) !important;
+}
+html[data-ui-theme="milktea"] .text-blue-300,
+html[data-ui-theme="milktea"] .text-blue-400 {
+  color: var(--milk-accent) !important;
+}
+html[data-ui-theme="milktea"] button.bg-blue-600,
+html[data-ui-theme="milktea"] button.bg-blue-600:enabled {
+  background-color: var(--milk-accent) !important;
+  border-color: var(--milk-accent) !important;
+}
+html[data-ui-theme="milktea"] button.bg-blue-600:hover:enabled {
+  background-color: var(--milk-accent-hover) !important;
+}
+html[data-ui-theme="milktea"] input:not([type="checkbox"]):not([type="radio"]),
+html[data-ui-theme="milktea"] select,
+html[data-ui-theme="milktea"] textarea {
+  color: var(--milk-ink) !important;
+  background-color: var(--milk-surface) !important;
+  border-color: var(--milk-border) !important;
+}
+html[data-ui-theme="milktea"] input::placeholder,
+html[data-ui-theme="milktea"] textarea::placeholder {
+  color: #8b7e72 !important;
+}
+html[data-ui-theme="milktea"] :focus-visible {
+  outline: 3px solid var(--milk-focus) !important;
+  outline-offset: 2px;
+}
+
+/* Retheme the existing auth form without moving its controls or changing logout behavior. */
+html[data-ui-theme="milktea"] #supabase-auth-gate .auth-card,
+html[data-ui-theme="milktea"] #supabase-auth-reverify .auth-card {
+  color: var(--milk-ink) !important;
+  background: var(--milk-surface) !important;
+  border-color: var(--milk-border) !important;
+  box-shadow: var(--milk-shadow) !important;
+}
+html[data-ui-theme="milktea"] #supabase-auth-gate h2,
+html[data-ui-theme="milktea"] #supabase-auth-reverify h2 { color: var(--milk-ink) !important; }
+html[data-ui-theme="milktea"] #supabase-auth-gate p,
+html[data-ui-theme="milktea"] #supabase-auth-reverify p { color: var(--milk-muted) !important; }
+html[data-ui-theme="milktea"] #supabase-auth-gate label,
+html[data-ui-theme="milktea"] #supabase-auth-reverify label { color: var(--milk-ink) !important; }
+html[data-ui-theme="milktea"] #supabase-auth-gate input,
+html[data-ui-theme="milktea"] #supabase-auth-reverify input {
+  color: var(--milk-ink) !important;
+  background: var(--milk-surface) !important;
+  border-color: var(--milk-border) !important;
+}
+html[data-ui-theme="milktea"] #supabase-auth-submit,
+html[data-ui-theme="milktea"] #supabase-reverify-submit {
+  background: var(--milk-accent) !important;
+  color: #fff !important;
+}
+html[data-ui-theme="milktea"] #supabase-auth-mode { color: var(--milk-accent) !important; }
+
+/* Keep camera/video imagery and the L1–L4 alert treatment as-is. */
+html[data-ui-theme="milktea"] #camera-container,
+html[data-ui-theme="milktea"] #remote-video {
+  background-color: #181614 !important;
+}
+html[data-ui-theme="milktea"] #camera-container {
+  border-color: var(--milk-border) !important;
+  box-shadow: var(--milk-shadow) !important;
+}
+html[data-ui-theme="milktea"] #standby-overlay {
+  background-color: rgba(255, 250, 243, .96) !important;
+}
+html[data-ui-theme="milktea"] #loading-overlay {
+  background-color: rgba(255, 250, 243, .96) !important;
+}
+.ui-refresh-toolbar {
+  box-sizing: border-box;
+  width: min(calc(100% - 2rem), 44rem);
+  margin: .75rem auto 0;
+  padding: .8rem 1rem;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  color: var(--milk-ink);
+  background: var(--milk-surface);
+  border: 1px solid var(--milk-border);
+  border-radius: 1rem;
+  box-shadow: var(--milk-shadow);
+}
+
+.ui-refresh-clock { min-width: 0; }
+.ui-refresh-toolbar--patient { max-width: 28rem; }
+.ui-refresh-toolbar--caregiver { max-width: 50rem; }
+.ui-refresh-greeting {
+  margin: 0 0 .2rem;
+  color: var(--milk-accent);
+  font-size: 1.15rem;
+  font-weight: 750;
+  line-height: 1.25;
+}
+.ui-refresh-date-line {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: .25rem .6rem;
+  color: var(--milk-muted);
+  font-size: .875rem;
+  font-variant-numeric: tabular-nums;
+}
+.ui-refresh-time { color: var(--milk-ink); font-weight: 700; }
+.ui-refresh-font-controls {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: .35rem;
+  white-space: nowrap;
+}
+.ui-refresh-font-label { color: var(--milk-muted); font-size: .8rem; }
+.ui-refresh-font-controls button {
+  min-width: 44px;
+  min-height: 44px;
+  padding: .4rem .6rem;
+  color: var(--milk-ink);
+  background: var(--milk-surface-soft);
+  border: 1px solid var(--milk-border);
+  border-radius: .75rem;
+  font: inherit;
+  font-weight: 700;
+  cursor: pointer;
+}
+.ui-refresh-font-controls button:disabled { opacity: .45; cursor: not-allowed; }
+.ui-refresh-font-value {
+  min-width: 3.25rem;
+  color: var(--milk-accent);
+  font-weight: 750;
+  text-align: center;
+  font-variant-numeric: tabular-nums;
+}
+
+html[data-ui-theme="milktea"] #camera-container { border-radius: 1.25rem; }
+html[data-ui-theme="milktea"] #btn-start-meal {
+  min-height: 58px;
+  color: #fff !important;
+  background-color: #54745d !important;
+  border-color: #54745d !important;
+  box-shadow: 0 8px 20px rgba(49, 82, 57, .18);
+}
+html[data-ui-theme="milktea"] #btn-start-meal:disabled {
+  color: #6f7a71 !important;
+  background-color: #dce5da !important;
+  border-color: #d1dacd !important;
+  opacity: .75 !important;
+}
+html[data-ui-theme="milktea"] #btn-end-meal:disabled {
+  color: #85796e !important;
+  background-color: #e8dfd5 !important;
+  border-color: #d9cdbf !important;
+  opacity: .8 !important;
+  cursor: not-allowed;
+}
+html[data-ui-theme="milktea"] #btn-end-meal:enabled {
+  min-height: 58px;
+  grid-column: 1 / -1;
+  justify-self: center;
+  width: min(100%, 22rem);
+}
+html[data-ui-theme="milktea"] footer {
+  color: var(--milk-muted) !important;
+  background-color: var(--milk-surface) !important;
+  border-color: var(--milk-border) !important;
+}
+
+@media (max-width: 480px) {
+  .ui-refresh-toolbar {
+    width: calc(100% - 1.25rem);
+    margin-top: .5rem;
+    padding: .7rem;
+    gap: .5rem;
+  }
+  .ui-refresh-font-label { display: none; }
+  .ui-refresh-font-controls { gap: .2rem; }
+  .ui-refresh-font-controls button { min-width: 42px; min-height: 44px; padding: .35rem; }
+  .ui-refresh-date-line { font-size: .8rem; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html[data-ui-theme="milktea"] *,
+  html[data-ui-theme="milktea"] *::before,
+  html[data-ui-theme="milktea"] *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: .01ms !important;
+  }
+}

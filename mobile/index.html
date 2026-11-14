@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-TW" class="dark">
+<html lang="zh-TW" class="dark" data-ui-theme="milktea">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
@@ -27,6 +27,7 @@
         window.AudioClassifier = audioTasks.AudioClassifier;
     </script>
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="ui-refresh.css">
     <!-- 核心設定與應用腳本引用 (置於 Head 提前解析) -->
     <script src="config.js?v=20261110_d0b3a1b"></script>
     <script src="connection-core.js?v=20261110_d0b3a1b"></script>
@@ -54,6 +55,23 @@
             </button>
         </div>
     </header>
+
+    <section id="ui-refresh-controls" class="ui-refresh-toolbar ui-refresh-toolbar--patient" aria-label="待機資訊與字體設定">
+        <div class="ui-refresh-clock" aria-live="polite">
+            <p id="idle-greeting" class="ui-refresh-greeting">歡迎使用</p>
+            <div class="ui-refresh-date-line">
+                <time id="idle-date" datetime="">日期</time>
+                <span id="idle-weekday">星期</span>
+                <time id="idle-time" class="ui-refresh-time" datetime="">--:--</time>
+            </div>
+        </div>
+        <div class="ui-refresh-font-controls" aria-label="字體大小調整">
+            <span class="ui-refresh-font-label">字體</span>
+            <button id="ui-font-decrease" type="button" aria-label="縮小字體">A−</button>
+            <output id="ui-font-percent" class="ui-refresh-font-value" aria-live="polite">100%</output>
+            <button id="ui-font-increase" type="button" aria-label="放大字體">A＋</button>
+        </div>
+    </section>
 
     <!-- 主要相機與 AI 監測內容區 -->
     <main class="flex-1 max-w-md w-full mx-auto p-4 flex flex-col justify-center space-y-4">
@@ -298,5 +316,6 @@
         </div>
     </div>
 
+    <script src="ui-refresh.js"></script>
 </body>
 </html>

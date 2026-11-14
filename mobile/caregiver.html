@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="zh-TW" class="dark">
+<html lang="zh-TW" class="dark" data-ui-theme="milktea">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -11,6 +11,7 @@
     <!-- Chart.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <link rel="stylesheet" href="style.css">
+    <link rel="stylesheet" href="ui-refresh.css">
 </head>
 <body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col">
 
@@ -48,6 +49,23 @@
             </button>
         </div>
     </header>
+
+    <section id="ui-refresh-controls" class="ui-refresh-toolbar ui-refresh-toolbar--caregiver" aria-label="儀表板時間與字體設定">
+        <div class="ui-refresh-clock" aria-live="polite">
+            <p id="dashboard-greeting" class="ui-refresh-greeting">照護狀態總覽</p>
+            <div class="ui-refresh-date-line">
+                <time id="dashboard-date" datetime="">日期</time>
+                <span id="dashboard-weekday">星期</span>
+                <time id="dashboard-time" class="ui-refresh-time" datetime="">--:--</time>
+            </div>
+        </div>
+        <div class="ui-refresh-font-controls" aria-label="字體大小調整">
+            <span class="ui-refresh-font-label">字體</span>
+            <button id="ui-font-decrease" type="button" aria-label="縮小字體">A−</button>
+            <output id="ui-font-percent" class="ui-refresh-font-value" aria-live="polite">100%</output>
+            <button id="ui-font-increase" type="button" aria-label="放大字體">A＋</button>
+        </div>
+    </section>
 
     <!-- 主要 Dashboard 內容網格 -->
     <main class="flex-1 p-6 max-w-7xl w-full mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -199,5 +217,6 @@
     <script src="connection-core.js?v=20261110_d0b3a1b"></script>
     <script src="auth-ui.js?v=20261110_d0b3a1b"></script>
     <script src="caregiver.js?v=20261110_d0b3a1b"></script>
+    <script src="ui-refresh.js"></script>
 </body>
 </html>
