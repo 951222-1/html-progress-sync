@@ -58,6 +58,20 @@ test('Pages patient and caregiver endpoints link the loopback recording companio
   assert.match(caregiverPage,/本機整餐影片/);
 });
 
+test('patient recording confirmation is nested in the fullscreen main and removes the persistent top banner', () => {
+  const mainStart = patientPage.indexOf('<main');
+  const mainEnd = patientPage.indexOf('</main>', mainStart);
+  const dialogStart = patientPage.indexOf('id="meal-recording-confirm-dialog"');
+  assert.ok(mainStart >= 0 && mainEnd > mainStart, 'patient main must exist');
+  assert.ok(dialogStart > mainStart && dialogStart < mainEnd, 'confirmation must remain visible in meal fullscreen');
+  const recordingStatus = patientPage.indexOf('id="local-recording-status"');
+  assert.ok(recordingStatus > mainStart && recordingStatus < mainEnd, 'recording state must remain visible in meal fullscreen');
+  assert.doesNotMatch(patientPage.slice(0, mainStart), /local-recording-connect-panel|local-recording-connect-status/);
+  for (const id of ['meal-recording-choice-record','meal-recording-choice-no-record','meal-recording-choice-cancel','local-recording-connect']) {
+    assert.match(patientPage,new RegExp(`id="${id}"`));
+  }
+});
+
 test('both endpoints load shared authentication and private-channel support', () => {
   assert.match(patientPage, /auth-ui\.js/);
   assert.match(caregiverPage, /auth-ui\.js/);

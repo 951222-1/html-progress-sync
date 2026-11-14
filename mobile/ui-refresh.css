@@ -262,6 +262,68 @@ html[data-ui-theme="milktea"] footer {
   font-size: .85rem;
   line-height: 1.45;
 }
+.ui-meal-recording-dialog {
+  box-sizing: border-box;
+  width: min(calc(100vw - 1.25rem), 34rem);
+  max-width: none;
+  max-height: calc(100dvh - 1rem);
+  margin: auto;
+  padding: 0;
+  color: var(--milk-ink);
+  background: transparent;
+  border: 0;
+  overflow: visible;
+}
+.ui-meal-recording-dialog::backdrop { background: rgba(36, 28, 22, .68); }
+.ui-meal-recording-dialog-card {
+  box-sizing: border-box;
+  max-height: calc(100dvh - 1rem);
+  overflow: auto;
+  padding: clamp(1rem, 4vw, 1.5rem);
+  color: var(--milk-ink);
+  background: var(--milk-surface);
+  border: 1px solid var(--milk-border);
+  border-radius: 1.25rem;
+  box-shadow: 0 20px 60px rgba(36, 28, 22, .28);
+}
+.ui-meal-recording-eyebrow { margin: 0 0 .35rem; color: var(--milk-accent); font-size: .78rem; font-weight: 750; }
+.ui-meal-recording-dialog-card h2 { margin: 0 0 .65rem; color: var(--milk-ink); font-size: 1.25rem; line-height: 1.3; }
+.ui-meal-recording-dialog-card > p:not(.ui-meal-recording-eyebrow) { color: var(--milk-muted); font-size: .9rem; line-height: 1.55; }
+.ui-recording-connect-panel {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: .75rem;
+  margin: 1rem 0;
+  padding: .8rem;
+  background: var(--milk-surface-soft);
+  border: 1px solid var(--milk-border);
+  border-radius: 1rem;
+}
+.ui-meal-recording-confirm-status {
+  margin: .75rem 0;
+  color: var(--milk-muted);
+  font-size: .88rem;
+  line-height: 1.5;
+}
+.ui-meal-recording-actions { display: grid; gap: .6rem; margin-top: 1rem; }
+.ui-meal-recording-actions button {
+  min-height: 48px;
+  width: 100%;
+  padding: .65rem 1rem;
+  border-radius: .85rem;
+  font: inherit;
+  font-weight: 750;
+  cursor: pointer;
+}
+.ui-meal-recording-record-button { color: #fff; background: var(--milk-accent); border: 1px solid var(--milk-accent); }
+.ui-meal-recording-record-button:hover { background: var(--milk-accent-hover); }
+.ui-meal-recording-no-record-button { color: var(--milk-ink); background: var(--milk-surface-soft); border: 1px solid var(--milk-border); }
+.ui-meal-recording-cancel-button { color: var(--milk-muted); background: transparent; border: 1px solid transparent; }
+.ui-meal-recording-actions button[hidden] { display: none !important; }
+.ui-meal-recording-actions button:disabled { opacity: .6; cursor: wait; }
+
 .ui-recording-panel {
   box-sizing: border-box;
   width: min(calc(100% - 2rem), 80rem);

@@ -146,11 +146,76 @@
   const recorder=ui.initialize({api});
   const connectButton=root.document?.getElementById('local-recording-connect');
   const connectPanel=root.document?.getElementById('local-recording-connect-panel');
+  const confirmDialog=root.document?.getElementById('meal-recording-confirm-dialog');
+  const recordChoiceButton=root.document?.getElementById('meal-recording-choice-record');
+  const noRecordChoiceButton=root.document?.getElementById('meal-recording-choice-no-record');
+  const cancelChoiceButton=root.document?.getElementById('meal-recording-choice-cancel');
+  const confirmStatus=root.document?.getElementById('meal-recording-confirm-status');
+  const connectStatus=root.document?.getElementById('local-recording-connect-status');
   attachLogoutRevocation(root,api);
   addPatientConsentControl(root);
-  let selectedId=null,consent=false,consentGeneration=0,creatingPatient=false,startLocked=false,channel=null,pendingConsent=null;
+  let selectedId=null,consent=false,consentGeneration=0,creatingPatient=false,startLocked=false,channel=null,pendingConsent=null,startPromptPending=false,recordThisMeal=false;
   function say(text,state='selected'){
-   const status=root.document?.getElementById('local-recording-status');if(status){status.hidden=!text;status.textContent=text;status.dataset.state=state;}
+   const modalOpen=Boolean(startPromptPending||confirmDialog?.open);
+   const status=modalOpen?confirmStatus:root.document?.getElementById('local-recording-status');
+   if(!status)return;
+   if(!modalOpen&&state!=='error'){status.hidden=true;status.textContent='';return;}
+   status.hidden=!text;status.textContent=text;status.dataset.state=state;
+  }
+  function canRecordThisMeal(profile){return !!(profile?.id&&api.isConnected&&consent&&selectedId===profile.id&&getPatient(root)?.id===profile.id);}
+  function refreshMealStartOptions(profile=getPatient(root)){
+   const canRecord=canRecordThisMeal(profile);
+   if(recordChoiceButton)recordChoiceButton.hidden=!canRecord;
+   if(noRecordChoiceButton){noRecordChoiceButton.hidden=false;noRecordChoiceButton.textContent=canRecord?'不錄影，照常開始用餐':'照常開始用餐（不錄影）';}
+   if(connectPanel)connectPanel.hidden=!!api.isConnected;
+   if(confirmStatus){
+    confirmStatus.hidden=false;
+    confirmStatus.textContent=!profile?.id
+     ?'尚未選擇個案；本次不會錄影，開始用餐後會先要求選擇個案。'
+     :canRecord
+      ?'照護端已同意且本機服務已連線。請選擇本餐是否錄影；「不錄影」不會改動已儲存的同意。'
+      :!api.isConnected
+       ?'本機錄影服務尚未連線；若繼續，本餐不會錄影。可先連接服務，或選擇不錄影開始。'
+       :'照護端尚未啟用此個案的本機錄影；此處不會更改同意設定。可照常開始但不錄影。';
+   }
+   return canRecord;
+  }
+  function requestMealStartChoice(profile){
+   if(!confirmDialog||typeof confirmDialog.showModal!=='function'||!noRecordChoiceButton||!cancelChoiceButton){
+    startPromptPending=false;say('無法顯示開始用餐確認視窗；為避免未確認就啟動，已取消。請重新載入頁面。','error');return Promise.resolve('cancel');
+   }
+   refreshMealStartOptions(profile);
+   startPromptPending=true;
+   return new Promise(resolve=>{
+    let settled=false;
+    const finish=choice=>{
+     if(settled)return;settled=true;
+     recordChoiceButton?.removeEventListener?.('click',onRecord);
+     noRecordChoiceButton.removeEventListener?.('click',onNoRecord);
+     cancelChoiceButton.removeEventListener?.('click',onCancel);
+     confirmDialog.removeEventListener?.('cancel',onEscape);
+     startPromptPending=false;
+     try{confirmDialog.close?.();}catch(_){}
+     if(choice==='cancel'&&root.document?.fullscreenElement&&typeof root.document.exitFullscreen==='function'){
+      try{Promise.resolve(root.document.exitFullscreen()).catch(()=>{});}catch(_){}
+     }
+     resolve(choice);
+    };
+    const onRecord=event=>{
+     event?.preventDefault?.();
+     if(canRecordThisMeal(profile))finish('record');
+     else{refreshMealStartOptions(profile);if(confirmStatus)confirmStatus.textContent+=' 錄影條件已變更；請重新選擇不錄影開始或返回。';}
+    };
+    const onNoRecord=event=>{event?.preventDefault?.();finish('no-record');};
+    const onCancel=event=>{event?.preventDefault?.();finish('cancel');};
+    const onEscape=event=>{event?.preventDefault?.();finish('cancel');};
+    recordChoiceButton?.addEventListener?.('click',onRecord);
+    noRecordChoiceButton.addEventListener('click',onNoRecord);
+    cancelChoiceButton.addEventListener('click',onCancel);
+    confirmDialog.addEventListener?.('cancel',onEscape);
+    try{confirmDialog.showModal();}
+    catch(_){startPromptPending=false;say('無法顯示開始用餐確認視窗；為避免未確認就啟動，已取消。請重新載入頁面。','error');finish('cancel');}
+   });
   }
   async function connectLocalService(){
    if(api.isConnected)return true;
@@ -165,7 +230,7 @@
      catch(error){say('本機同意設定未儲存；錄影仍保持關閉。請在照護端重新確認。','error');return false;}
     }
     const profile=getPatient(root);if(profile)await loadConsent(profile);
-    say('本機錄影服務已連線；影片只會存放在這台電腦。','selected');
+    refreshMealStartOptions(profile);
     return true;
    }catch(error){
     if(connectButton)connectButton.disabled=false;
@@ -177,22 +242,24 @@
   if(api.isRemote){
    void api.getPermissionState().then(state=>{
     if(state==='granted')void connectLocalService();
-    else if(state==='denied')say('瀏覽器尚未允許此網站存取本機錄影服務。請按「連接本機服務」並依提示調整網站權限。','error');
-    else say('請先按「連接本機服務」；連線時瀏覽器會詢問本機網路權限。','selected');
+    else if(connectStatus)connectStatus.textContent=state==='denied'
+     ?'瀏覽器尚未允許此網站存取本機錄影服務；開始用餐前可按此處並依網站權限提示操作。'
+     :'如要錄影，請在開始用餐前連接本機服務；瀏覽器會詢問本機網路權限。';
    });
   }else void connectLocalService();
   async function loadConsent(profile){
    if(!profile?.id){selectedId=null;consent=false;ui.selectPatient(null);say('');return false;}
    selectedId=profile.id;consent=false;const generation=++consentGeneration;
    ui.selectPatient({...profile,recording_enabled:false});
-   if(!api.isConnected){say('請先連接本機錄影服務；未連線時不會保存影片或同意狀態。','selected');return false;}
+   if(!api.isConnected){say('請先連接本機錄影服務；未連線時不會保存影片或同意狀態。','selected');refreshMealStartOptions(profile);return false;}
    try{
     const result=await api.request('/api/local/consent?patient_id='+encodeURIComponent(profile.id));
     if(generation!==consentGeneration||selectedId!==profile.id)return false;
     consent=result.recording_enabled===true;
     ui.selectPatient({...profile,recording_enabled:consent});
     say(consent?'此個案已啟用整餐無聲錄影；影片只保存在這台電腦。':'本機錄影未啟用；原有即時偵測照常運作。',consent?'selected':'idle');
-   }catch(error){if(generation===consentGeneration){consent=false;ui.selectPatient({...profile,recording_enabled:false});say('本機錄影服務或登入驗證不可用；錄影保持關閉，原有偵測照常運作。','error');}return false;}
+    refreshMealStartOptions(profile);
+   }catch(error){if(generation===consentGeneration){consent=false;ui.selectPatient({...profile,recording_enabled:false});say('本機錄影服務或登入驗證不可用；錄影保持關閉，原有偵測照常運作。','error');refreshMealStartOptions(profile);}return false;}
    return consent;
   }
   function installConsentChannel(patientId){
@@ -203,7 +270,7 @@
     if(event.data?.patientId!==selectedId)return;
     consent=event.data.enabled===true;
     if(!consent)void recorder.end();
-    const profile=getPatient(root);if(profile)ui.selectPatient({...profile,recording_enabled:consent});
+    const profile=getPatient(root);if(profile){ui.selectPatient({...profile,recording_enabled:consent});refreshMealStartOptions(profile);}
     say(consent?'照護端已啟用本機無聲錄影。':'照護端已關閉本機錄影；目前影片會保留在這台電腦。',consent?'selected':'idle');
    };
   }
@@ -226,15 +293,22 @@
    }
   });
   wrap(root,'startMealSession',original=>async function(...args){
-   if(startLocked)return;startLocked=true;
+   if(startLocked)return;startLocked=true;recordThisMeal=false;
+   const profile=getPatient(root);
    try{
-    const profile=getPatient(root);if(profile?.id)await loadConsent(profile);
+    startPromptPending=true;
+    await loadConsent(profile);
+    refreshMealStartOptions(profile);
+    startPromptPending=false;
+    const choice=await requestMealStartChoice(profile);
+    if(choice==='cancel')return false;
+    recordThisMeal=choice==='record'&&canRecordThisMeal(profile);
     const result=await original.apply(this,args);
-    if(root.isMealSessionActive?.()&&profile?.id&&selectedId===profile.id&&consent){
+    if(root.isMealSessionActive?.()&&profile?.id&&selectedId===profile.id&&recordThisMeal&&canRecordThisMeal(profile)){
      recorder.begin({id:profile.id,recording_enabled:true},getSessionPromise(root));
     }
     return result;
-   }finally{startLocked=false;}
+   }finally{startPromptPending=false;recordThisMeal=false;startLocked=false;}
   });
   wrap(root,'endMealSession',original=>function(...args){
    // stop() releases the recorder's derived canvas track immediately; its upload continues in the background.
