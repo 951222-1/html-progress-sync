@@ -29,10 +29,10 @@
     <link rel="stylesheet" href="style.css?v=20261115_mirrorfix">
     <link rel="stylesheet" href="ui-refresh.css?v=20261115_9aadfbf">
     <!-- 核心設定與應用腳本引用 (置於 Head 提前解析) -->
-    <script src="config.js?v=20261115_951df64"></script>
-    <script src="connection-core.js?v=20261115_951df64"></script>
-    <script src="auth-ui.js?v=20261115_951df64"></script>
-    <script src="app.js?v=20261115_951df64"></script>
+    <script src="config.js?v=20261115_f485c56"></script>
+    <script src="connection-core.js?v=20261115_f485c56"></script>
+    <script src="auth-ui.js?v=20261115_f485c56"></script>
+    <script src="app.js?v=20261115_f485c56"></script>
 </head>
 <body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col justify-between select-none">
 
@@ -99,59 +99,6 @@
                 <p class="text-[11px] text-slate-400">背景下載中，您可以直接開始用餐與開啟相機</p>
             </div>
 
-            <!-- 實時狀態 HUD Overlay (預設顯示偵測數據與 AI 就緒狀態，方便組員測試驗證警報) -->
-            <div id="hud-stats-overlay" class="absolute top-3 left-3 bg-slate-900/80 backdrop-blur px-3 py-1.5 rounded-xl border border-slate-700/60 text-[11px] space-y-0.5 z-20">
-                <div class="flex items-center justify-between gap-2 border-b border-slate-700/60 pb-0.5 mb-0.5">
-                    <span class="font-bold text-blue-300">🎯 偵測數據 HUD</span>
-                    <button id="btn-toggle-hud-stats" type="button" onclick="if(window.toggleHudStatsDetails)window.toggleHudStatsDetails()" class="text-[10px] text-slate-300 hover:text-white px-1 rounded bg-slate-800/80">收合</button>
-                </div>
-                <div class="flex items-center space-x-2">
-                    <span class="text-slate-400">進食狀態:</span>
-                    <span id="hud-state" class="font-bold text-amber-300">IDLE</span>
-                </div>
-                <div class="flex items-center space-x-2">
-                    <span class="text-slate-400">AI 模型:</span>
-                    <span id="hud-ai-status" class="font-bold text-amber-400">⏳ 載入中...</span>
-                </div>
-                <div id="hud-stats-details" class="space-y-0.5">
-                <div class="flex items-center space-x-2">
-                    <span class="text-slate-400">當前質地:</span>
-                    <span id="hud-diet" class="font-bold text-blue-300">普通餐食</span>
-                </div>
-                <div class="flex items-center space-x-2">
-                    <span class="text-slate-400">累積咀嚼:</span>
-                    <span id="hud-chews" class="font-mono font-bold text-emerald-400 text-sm">0 次</span>
-                </div>
-                <div class="flex items-center space-x-2">
-                    <span class="text-slate-400">成功吞嚥:</span>
-                    <span id="hud-swallows" class="font-mono font-bold text-blue-400 text-sm">0 次</span>
-                </div>
-                <div class="flex items-center space-x-2">
-                    <span class="text-slate-400">MAR (嘴開比):</span>
-                    <span id="hud-mar" class="font-mono text-slate-200">0.00</span>
-                </div>
-                <div class="flex items-center space-x-2">
-                    <span class="text-slate-400">Jaw Std (下巴差):</span>
-                    <span id="hud-jaw-std" class="font-mono text-slate-200">0.00</span>
-                </div>
-                <div class="flex items-center space-x-2">
-                    <span class="text-slate-400">下巴速度:</span>
-                    <span id="hud-jaw-vel" class="font-mono text-slate-200">0.00</span>
-                </div>
-                <div class="flex items-center space-x-2">
-                    <span class="text-slate-400">嘴唇藍光比:</span>
-                    <span id="hud-cyanosis" class="font-mono text-emerald-400 font-bold">0.25 (正常)</span>
-                </div>
-                <div class="flex items-center space-x-2">
-                    <span class="text-slate-400">證據融合分:</span>
-                    <span id="hud-fusion-score" class="font-mono text-blue-300 font-bold">0.00 / 1.0</span>
-                </div>
-                <div class="flex items-center space-x-2">
-                    <span class="text-slate-400">拍胸＋晃動:</span>
-                    <span id="hud-shake-timer" class="font-mono text-emerald-400 font-bold">0.0s / 3.0s</span>
-                </div>
-                </div>
-            </div>
 
             <!-- 畫面中央底部 動態動作狀態 Pill -->
             <div class="absolute bottom-3 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur px-4 py-1.5 rounded-full border border-slate-700/80 shadow-lg flex items-center space-x-2 z-20">

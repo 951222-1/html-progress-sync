@@ -463,12 +463,12 @@ test('patient session migration adds swallow-count and event-schema version fiel
   assert.doesNotMatch(migration, /avg_swallow_pause/);
 });
 
-test('caregiver history UI exposes the agreed range selector, per-meal list and live swallow count', () => {
+test('caregiver history UI exposes the agreed range selector and per-meal list without a live swallow summary card', () => {
   assert.match(caregiverPage, /id="caregiver-history-range"/);
   assert.match(caregiverPage, /value="recent7"/);
   assert.match(caregiverPage, /value="30days"/);
   assert.match(caregiverPage, /id="meal-history-list"/);
-  assert.match(caregiverPage, /id="stat-swallows"/);
+  assert.doesNotMatch(caregiverPage, /id="stat-swallows"/);
   assert.doesNotMatch(caregiverPage, /id="chart-swallow-trend"/);
 });
 
@@ -805,12 +805,12 @@ test('caregiver profile loader populates a safe select and prefers requested the
   assert.equal(select.value, 'P002', 'existing selection is preferred when requested code is unavailable');
 });
 
-test('patient diet selector stays removed while caregiver shows concise live metrics', () => {
+test('patient diet selector and crossed-out caregiver metrics stay removed while cough count remains', () => {
   assert.doesNotMatch(patientPage, /請選擇本次用餐質地/);
   assert.doesNotMatch(patientPage, /id="btn-diet-(regular|soft|pureed)"/);
 
-  assert.match(caregiverPage, /id="stat-chews"/);
-  assert.match(caregiverPage, /id="stat-swallows"/);
+  assert.doesNotMatch(caregiverPage, /id="stat-chews"/);
+  assert.doesNotMatch(caregiverPage, /id="stat-swallows"/);
   assert.match(caregiverPage, /id="stat-coughs"/);
   assert.doesNotMatch(caregiverPage, /id="stat-jaw-vel"/);
   assert.doesNotMatch(caregiverPage, /id="stat-pouching"/);
@@ -818,15 +818,11 @@ test('patient diet selector stays removed while caregiver shows concise live met
   const startAt = caregiverJs.indexOf('function handleStateUpdate(state) {');
   const endAt = caregiverJs.indexOf('function showCaregiverAlert(', startAt);
   const source = caregiverJs.slice(startAt, endAt) + '\nglobalThis.testHandleStateUpdate = handleStateUpdate;';
-  const chewNode = { innerText: '0' };
-  const swallowNode = { innerText: '0' };
   const coughNode = { innerText: '0' };
   const dietNode = { innerText: '-' };
   const context = {
     document: {
       getElementById(id) {
-        if (id === 'stat-chews') return chewNode;
-        if (id === 'stat-swallows') return swallowNode;
         if (id === 'stat-coughs') return coughNode;
         if (id === 'caregiver-diet-type') return dietNode;
         return null;
@@ -854,8 +850,6 @@ test('patient diet selector stays removed while caregiver shows concise live met
     activeAlertLevel: null,
     sessionEnded: false
   });
-  assert.equal(chewNode.innerText, 25);
-  assert.equal(swallowNode.innerText, 3);
   assert.equal(coughNode.innerText, 6);
 });
 
@@ -1153,10 +1147,15 @@ test('L4 acute choking alert pops up the top-right web notification toast on bot
   assert.match(caregiverJs, /if \(level === 'L4'\) \{\s*showL4WebNotificationToast\(resolvedMsg\);\s*\}/);
 });
 
-test('detection HUD overlay is visible by default and MediaPipe landmark detection has canvas and CPU fallbacks', () => {
-  assert.match(patientPage, /id="hud-stats-overlay" class="[^"]*z-20"/);
-  assert.doesNotMatch(patientPage, /id="hud-stats-overlay" class="[^"]*hidden/);
-  assert.match(patientPage, /id="btn-toggle-hud-stats"/);
+test('crossed-out patient detection HUD is absent while camera, mic, and alert UI remain', () => {
+  assert.doesNotMatch(patientPage, /id="hud-stats-overlay"|id="btn-toggle-hud-stats"|id="hud-stats-details"/);
+  assert.doesNotMatch(patientJs, /toggleHudStatsDetails/);
+  for (const id of ['camera-container','webcam-video','ai-canvas','hud-mic-pill','alert-overlay']) {
+    assert.match(patientPage, new RegExp(`id="${id}"`));
+  }
+});
+
+test('removing detection HUD does not remove MediaPipe landmark detection and fallbacks', () => {
   assert.match(patientJs, /lastVisionTimestampMs/);
   assert.match(patientJs, /fallbackVisionToCpu/);
   assert.match(patientJs, /faceLandmarker\.detectForVideo\(aiCanvas,\s*lastVisionTimestampMs\)/);

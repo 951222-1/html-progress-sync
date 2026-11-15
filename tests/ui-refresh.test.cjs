@@ -54,6 +54,10 @@ test('caregiver UI gets monitor header controls while preserving alert, audio, c
   assert.match(caregiver, /ui-refresh\.js/);
 });
 
+test('caregiver dashboard removes the crossed-out chewing/swallow cards but keeps cough events', () => {
+  assert.doesNotMatch(caregiver, /id="stat-chews"|id="stat-swallows"/);
+  assert.match(caregiver, /id="stat-coughs"/);
+});
 test('UI refresh remains presentation-only and does not filter camera/video or alter alarm modules', () => {
   const css = read('mobile/ui-refresh.css');
   const js = read('mobile/ui-refresh.js');
