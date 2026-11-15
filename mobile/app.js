@@ -118,7 +118,7 @@ const CHOKE_FACE_LOSS_WARNING_GRACE_SEC = 0.6;
 const chokeFaceLossWarningGuard = window.ConnectionCore.createFaceLossWarningGuard(CHOKE_FACE_LOSS_WARNING_GRACE_SEC);
 let lastChokeVisibilityWarningAt = -Infinity;
 
-// 🎯 L4 急性哽噎判定狀態 (3.0s 門檻 + 0.6s 緩衝 + 0.5x/s 漏桶漸進衰減 + 三路徑高特異性觸發)
+// 🎯 L4 急性哽噎判定狀態 (高敏感度：2.5s 門檻 + 0.9s 緩衝 + 0.25x/s 漸進衰減)
 let bodyMotionHistory = []; // { x, y, faceSize, time }
 let isBodyShakingContinuous = false;
 let isHandOnChest = false;
@@ -127,21 +127,21 @@ let handsInDangerZoneCount = 0;
 let chokeSimultaneousStartTime = null;
 let chokeSimultaneousDuration = 0.0;
 let chokeGraceStartTime = null;
-const CHOKE_SIMULTANEOUS_TRIGGER_SEC = 3.0; // 縮短為 3.0 秒門檻（雙手/嗆咳後抓喉為 2.5 秒）
-const CHOKE_POST_COUGH_WINDOW_SEC = 8.0;
+const CHOKE_SIMULTANEOUS_TRIGGER_SEC = 2.5; // L4 高敏感度測試門檻：2.5 秒
+const CHOKE_POST_COUGH_WINDOW_SEC = 12.0;   // 嗆咳後抓喉觀察窗放寬為 12.0 秒
 const chokeDangerAccumulator = window.ConnectionCore.createChokeDangerAccumulator({
     triggerSec: CHOKE_SIMULTANEOUS_TRIGGER_SEC,
-    graceSec: 0.6,
-    decayRate: 0.5
+    graceSec: 0.9,
+    decayRate: 0.25
 });
 
-// 🎤 Google YAMNet AI 咳嗽與呼吸道聲紋辨識設定 (對齊桌面版防哽咽裝置4_2.py)
+// 🎤 Google YAMNet AI 咳嗽與呼吸道聲紋辨識設定 (對齊桌面版高敏感度設定)
 const YAMNET_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/audio_classifier/yamnet/float32/1/yamnet.tflite";
 const YAMNET_WASM_URL = "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.0/wasm";
 const YAMNET_HOP_MS = 500;
-const YAMNET_CHOKE_TH_FUSION = 0.15;
-const YAMNET_COUGH_RECORD_TH = 0.20;
-const YAMNET_COUGH_SOLO_TH = 0.32;
+const YAMNET_CHOKE_TH_FUSION = 0.12;
+const YAMNET_COUGH_RECORD_TH = 0.18;
+const YAMNET_COUGH_SOLO_TH = 0.28;
 const YAMNET_CHOKE_KEYWORDS = ["cough", "throat", "choking", "gagging", "gasp", "wheeze", "pant"];
 const YAMNET_SPEECH_KEYWORDS = ["speech", "conversation", "narration", "chatter", "hubbub"];
 const YAMNET_LABEL_ZH = {
@@ -1718,27 +1718,27 @@ async function processVideoFrame(now) {
         lastChin = { x: chin.x, y: chin.y };
         lastAnchorTs = currentTime;
 
-        // 🎯 先計算身體掙扎晃動，若處於搖晃狀態則放寬手部感應關節點數 (>=1 點即生效，抗動態模糊)
+        // 🎯 先計算身體掙扎晃動；高敏感度設定固定以 1 個關節點判定手部手勢
         const faceSize = Math.hypot((nose.x - chin.x) * w, (nose.y - chin.y) * h);
         isBodyShakingContinuous = checkContinuousBodyShaking(nose, faceSize, currentTime, w, h);
         prevNose = { x: nose.x, y: nose.y };
 
-        // 🎯 手抓喉嚨與上胸口拍胸手勢偵測 (與畫面疊圖幾何 100% 一致)
+        // 🎯 手抓喉嚨與上胸口拍胸手勢偵測 (與畫面疊圖幾何一致，高敏感度 minPts=1)
         const handCheck = handNearChestOrThroat(
-            handLandmarks, nose, chin, w, h, isBodyShakingContinuous ? 1 : 2
+            handLandmarks, nose, chin, w, h, 1
         );
         isHandOnNeck = handCheck.isThroat;
         isHandOnChest = handCheck.isChest;
         isHandOnChestOrThroat = handCheck.near;
         handsInDangerZoneCount = handCheck.handsInZone;
 
-        // 影像嗆咳跡象 (提高門檻至連續 6 幀確認，過濾咀嚼干擾)
-        if (movementStd > 18.0 && Math.abs(mealMetrics.jawVelocity) > 10.0) {
+        // 影像嗆咳跡象 (高敏感度：std > 15.0、速度 > 8.0、連續 4 幀確認)
+        if (movementStd > 15.0 && Math.abs(mealMetrics.jawVelocity) > 8.0) {
             coughFrameCounter++;
         } else {
             coughFrameCounter = 0;
         }
-        if (coughFrameCounter >= 6) {
+        if (coughFrameCounter >= 4) {
             coughFrameCounter = 0;
             visionCough = true;
         }
@@ -1837,9 +1837,9 @@ async function processVideoFrame(now) {
             );
         }
 
-        // 人臉遺失快取處理 (2.0 秒錨點快取手勢)
+        // 人臉遺失快取處理 (2.0 秒錨點快取手勢；高敏感度 minPts=1)
         if (lastNose && (currentTime - lastAnchorTs) < ANCHOR_GRACE_SEC) {
-            const anchorHandCheck = handNearChestOrThroat(handLandmarks, lastNose, lastChin, w, h, 2);
+            const anchorHandCheck = handNearChestOrThroat(handLandmarks, lastNose, lastChin, w, h, 1);
             isHandOnNeck = anchorHandCheck.isThroat;
             handsInDangerZoneCount = anchorHandCheck.handsInZone;
         } else {
@@ -1922,9 +1922,9 @@ async function processVideoFrame(now) {
 
     // ------------------------------------------------------------------
     // 🚨 L4 急性哽噎決策邏輯 (漏桶漸進衰減 + 三路徑高特異性臨床觸發)
-    //   - 路徑 A (3.0s): 身體掙扎晃動 ＋ 手部拍胸／抓喉
-    //   - 路徑 B (2.5s): 雙手同時抓喉／撫胸窒息手勢
-    //   - 路徑 C (2.5s): 嗆咳後 8 秒內持續抓喉／撫胸
+    //   - 路徑 A: 身體掙扎晃動 ＋ 手部拍胸／抓喉
+    //   - 路徑 B: 雙手同時抓喉／撫胸窒息手勢 (rate=1.2，較快累積)
+    //   - 路徑 C: 嗆咳後 12 秒內持續抓喉／撫胸 (rate=1.2，較快累積)
     // ------------------------------------------------------------------
     const recentCoughForL4 = (currentTime - lastCoughTime) <= CHOKE_POST_COUGH_WINDOW_SEC;
     const l4Candidate = window.ConnectionCore.evaluateL4Candidate({
@@ -2435,9 +2435,9 @@ function getDangerZoneGeometry(nose, chin, w, h) {
     return {
         faceV,
         throatCenter: { x: throat.x * w, y: throat.y * h },
-        throatRadius: Math.max(faceV * 0.65, 22.0),
+        throatRadius: Math.max(faceV * 0.72, 24.0),
         chestCenter: { x: chest.x * w, y: chest.y * h },
-        chestRadius: Math.max(faceV * 1.15, 40.0)
+        chestRadius: Math.max(faceV * 1.25, 44.0)
     };
 }
 
@@ -2498,12 +2498,12 @@ function checkContinuousBodyShaking(nose, faceSize, currentTime, w, h) {
         bodyMotionHistory.shift();
     }
 
-    // 修正低 FPS 裝置鎖死問題：最少 4 幀且時間跨度 >= 0.45 秒即可評估（5-8 FPS 手機亦能正常觸發）
+    // 高敏感度且兼顧低 FPS：最少 4 幀且時間跨度 >= 0.35 秒即可評估
     if (bodyMotionHistory.length < 4) {
         return false;
     }
     const windowSpanSec = bodyMotionHistory[bodyMotionHistory.length - 1].time - bodyMotionHistory[0].time;
-    if (windowSpanSec < 0.45) {
+    if (windowSpanSec < 0.35) {
         return false;
     }
 
@@ -2541,12 +2541,12 @@ function checkContinuousBodyShaking(nose, faceSize, currentTime, w, h) {
     const sizeSpan = (maxSize - minSize) / faceSize;
 
     // 判定痛苦掙扎晃動／前後俯仰：
-    // - 至少 1 次方向折返或明顯前後俯仰尺度變化 (sizeSpan > 0.14)
-    // - 位移跨度達 0.12 倍臉長以上
-    // - 視窗內累計無因次化速度 > 1.2
-    const hasDirectionReversal = (xDirectionReversals >= 1 || yDirectionReversals >= 1 || sizeSpan > 0.14);
-    const hasSignificantSpan = (xSpan > 0.12 || ySpan > 0.12 || sizeSpan > 0.12);
-    const hasSustainedSpeed = (totalSpeed > 1.2);
+    // - 至少 1 次方向折返或明顯前後俯仰尺度變化 (sizeSpan > 0.12)
+    // - 位移跨度達 0.10 倍臉長以上
+    // - 視窗內累計無因次化速度 > 1.0
+    const hasDirectionReversal = (xDirectionReversals >= 1 || yDirectionReversals >= 1 || sizeSpan > 0.12);
+    const hasSignificantSpan = (xSpan > 0.10 || ySpan > 0.10 || sizeSpan > 0.10);
+    const hasSustainedSpeed = (totalSpeed > 1.0);
 
     return (hasSignificantSpan && hasSustainedSpeed && hasDirectionReversal);
 }
@@ -2839,7 +2839,7 @@ function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, state
             drawUnmirroredText(ctx, 'SWALLOWING...', 20, h - 30, w);
         }
 
-        // 🎯 7. L4 急性哽噎風險累積進度條 (3.0s 門檻 + 漸進衰減)
+        // 🎯 7. L4 急性哽噎風險累積進度條 (2.5s 門檻 + 漸進衰減)
         if (simultaneousSec > 0) {
             const barW = Math.min(w * 0.85, 340);
             const barH = 34;

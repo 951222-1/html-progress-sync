@@ -855,7 +855,22 @@ test('patient diet selector and crossed-out caregiver metrics stay removed while
 
 test('L4 overlay circles share exact geometry with handNearChestOrThroat and low-FPS body shaking works', () => {
   assert.match(patientJs, /lastCoughTime = -Infinity/);
-  assert.match(patientJs, /CHOKE_SIMULTANEOUS_TRIGGER_SEC = 3\.0/);
+  assert.match(patientJs, /CHOKE_SIMULTANEOUS_TRIGGER_SEC = 2\.5/);
+  assert.match(patientJs, /CHOKE_POST_COUGH_WINDOW_SEC = 12\.0/);
+  assert.match(patientJs, /graceSec:\s*0\.9,\s*decayRate:\s*0\.25/);
+  assert.match(patientJs, /YAMNET_CHOKE_TH_FUSION = 0\.12/);
+  assert.match(patientJs, /YAMNET_COUGH_RECORD_TH = 0\.18/);
+  assert.match(patientJs, /YAMNET_COUGH_SOLO_TH = 0\.28/);
+  assert.match(patientJs, /handNearChestOrThroat\(\s*handLandmarks,\s*nose,\s*chin,\s*w,\s*h,\s*1\s*\)/);
+  assert.match(patientJs, /handNearChestOrThroat\(handLandmarks,\s*lastNose,\s*lastChin,\s*w,\s*h,\s*1\)/);
+  assert.match(patientJs, /movementStd > 15\.0 && Math\.abs\(mealMetrics\.jawVelocity\) > 8\.0/);
+  assert.match(patientJs, /if \(coughFrameCounter >= 4\)/);
+  assert.match(patientJs, /throatRadius:\s*Math\.max\(faceV \* 0\.72,\s*24\.0\)/);
+  assert.match(patientJs, /chestRadius:\s*Math\.max\(faceV \* 1\.25,\s*44\.0\)/);
+  assert.match(patientJs, /if \(windowSpanSec < 0\.35\)/);
+  assert.match(patientJs, /sizeSpan > 0\.12/);
+  assert.match(patientJs, /xSpan > 0\.10 \|\| ySpan > 0\.10 \|\| sizeSpan > 0\.10/);
+  assert.match(patientJs, /totalSpeed > 1\.0/);
   assert.match(patientJs, /ConnectionCore\.evaluateL4Candidate\(/);
   assert.match(patientJs, /chokeDangerAccumulator\.update\(/);
 
