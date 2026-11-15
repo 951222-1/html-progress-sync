@@ -213,7 +213,13 @@ class LocalRecordingHandler(BaseHTTPRequestHandler):
         if root not in resolved.parents or not target.is_file() or target.is_symlink():
             raise APIError(404, "NOT_FOUND", "找不到本機資源。")
         content = target.read_bytes()
-        if html_injection and b'id="local-recording-connect"' not in content.lower():
+        lower_content = content.lower()
+        needs_injection = (
+            target.name == 'caregiver.html' and b'id="local-recording-connect"' not in lower_content
+        ) or (
+            target.name != 'caregiver.html' and b'bridge.js' not in lower_content
+        )
+        if html_injection and needs_injection:
             scripts = ("<script src=\"/local-recording/meal-recording.js\"></script>"
                        "<script src=\"/local-recording/local-recording-ui.js\"></script>"
                        "<script src=\"/local-recording/local-recording-panel.js\"></script>"
@@ -234,8 +240,8 @@ class LocalRecordingHandler(BaseHTTPRequestHandler):
                           "<video id=\"local-recording-player\" class=\"w-full max-h-[60vh] rounded-2xl bg-black\" controls playsinline muted preload=\"metadata\" hidden></video>"
                           "<div id=\"local-recording-marks\" class=\"flex flex-wrap gap-2\"></div></div></div></section>")
             else:
-                markup = ("<div id=\"local-recording-live\" hidden role=\"status\" aria-live=\"polite\" class=\"fixed bottom-24 right-4 z-[60] rounded-xl border border-rose-700 bg-rose-950/95 px-4 py-3 text-sm font-bold text-rose-100 shadow-xl\"></div>"
-                          "<p id=\"local-recording-status\" hidden role=\"status\" aria-live=\"polite\" class=\"mx-auto mb-3 w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900/95 p-3 text-xs leading-relaxed text-slate-100 shadow-xl\"></p>")
+                markup = ("" if b'id=\"local-recording-live\"' in content.lower() else
+                          "<div id=\"local-recording-live\" hidden role=\"status\" aria-live=\"polite\" class=\"fixed bottom-24 right-4 z-[60] rounded-xl border border-rose-700 bg-rose-950/95 px-4 py-3 text-sm font-bold text-rose-100 shadow-xl\"></div>")
             marker = b"</body>"
             if marker not in content.lower():
                 raise APIError(500, "HTML_INJECTION_POINT_MISSING", "本機頁面缺少安全掛載點，未啟用錄影。")

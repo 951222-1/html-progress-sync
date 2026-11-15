@@ -44,13 +44,13 @@ test('patient and caregiver scripts use one release-specific cache-bust version'
 
 test('Pages patient and caregiver endpoints link the loopback recording companion without replacing auth scripts', () => {
   for (const page of [patientPage, caregiverPage]) {
-    assert.match(page, /id="local-recording-connect-panel"/);
-    assert.match(page, /id="local-recording-connect"/);
     assert.match(page, /\.\.\/local_recording\/meal-recording\.js\?v=localrec-1/);
     assert.match(page, /\.\.\/local_recording\/bridge\.js\?v=localrec-1/);
     assert.match(page, /ui-refresh\.js/);
     assert.match(page, /auth-ui\.js/);
   }
+  assert.match(caregiverPage,/id="local-recording-connect-panel"/);
+  assert.match(caregiverPage,/id="local-recording-connect"/);
   for (const id of ['caregiver-alert-banner','btn-toggle-sound','chart-chew-trend','meal-history-list']) {
     assert.match(caregiverPage,new RegExp(`id="${id}"`));
   }
@@ -58,27 +58,18 @@ test('Pages patient and caregiver endpoints link the loopback recording companio
   assert.match(caregiverPage,/本機整餐影片/);
 });
 
-test('patient page has inline connection controls and no full-screen recording confirmation', () => {
+test('patient page removes the entire circled local-recording block but keeps recording status and scripts', () => {
   const mainStart = patientPage.indexOf('<main');
   const mainEnd = patientPage.indexOf('</main>', mainStart);
   assert.ok(mainStart >= 0 && mainEnd > mainStart, 'patient main must exist');
-  for (const id of ['local-recording-connect-panel','local-recording-connect-status','local-recording-connect','local-recording-live','local-recording-privacy','local-recording-status']) {
-    const at=patientPage.indexOf(`id="${id}"`);
-    assert.ok(at>mainStart&&at<mainEnd,`${id} must be available inline in the patient page`);
+  for (const id of ['local-recording-connect-panel','local-recording-connect-status','local-recording-connect','local-recording-privacy','local-recording-status']) {
+    assert.equal(patientPage.includes(`id="${id}"`),false,`${id} must be removed from the patient page`);
   }
-  const privacyText=patientPage.match(/<section id="local-recording-privacy"[^>]*>([^<]+)<\/section>/)?.[1]||'';
-  const privacyStart=patientPage.indexOf('id="local-recording-privacy"');
-  const connectionEnd=patientPage.indexOf('</section>',patientPage.indexOf('id="local-recording-connect-panel"'));
-  assert.ok(privacyStart>connectionEnd&&privacyStart<mainEnd,'privacy disclosure must remain outside the hideable connection panel');
-  assert.match(patientPage,/id="local-recording-privacy"[^>]*aria-label="錄影隱私說明"/);
-  assert.doesNotMatch(patientPage.slice(privacyStart-20,privacyStart+120),/\shidden(?:\s|>)/);
-  assert.match(privacyText,/無聲影片/);
-  assert.match(privacyText,/只保存在這台電腦/);
-  assert.match(privacyText,/不會上傳到 Supabase/);
-  assert.match(privacyText,/照護端.*啟用.*本機服務連線時.*自動/);
+  const liveStatus=patientPage.indexOf('id="local-recording-live"');
+  assert.ok(liveStatus>mainStart&&liveStatus<mainEnd,'recording-in-progress indicator remains available');
+  assert.match(patientPage,/\.\.\/local_recording\/bridge\.js\?v=localrec-1/);
   assert.match(patientPage,/id="btn-save-new-patient"[^>]*onclick="saveAndLoginNewPatient\(\)"/);
   assert.doesNotMatch(patientPage, /meal-recording-confirm-dialog|meal-recording-choice-(?:record|no-record|cancel)|meal-recording-confirm-status/);
-  assert.doesNotMatch(patientPage.slice(0, mainStart), /local-recording-connect-panel|local-recording-connect-status/);
 });
 
 test('caregiver recording connection controls live inside the recording panel instead of a persistent top toolbar', () => {
