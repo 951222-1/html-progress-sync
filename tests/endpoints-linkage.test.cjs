@@ -58,18 +58,26 @@ test('Pages patient and caregiver endpoints link the loopback recording companio
   assert.match(caregiverPage,/本機整餐影片/);
 });
 
-test('patient recording confirmation is nested in the fullscreen main and removes the persistent top banner', () => {
+test('patient page has inline connection controls and no full-screen recording confirmation', () => {
   const mainStart = patientPage.indexOf('<main');
   const mainEnd = patientPage.indexOf('</main>', mainStart);
-  const dialogStart = patientPage.indexOf('id="meal-recording-confirm-dialog"');
   assert.ok(mainStart >= 0 && mainEnd > mainStart, 'patient main must exist');
-  assert.ok(dialogStart > mainStart && dialogStart < mainEnd, 'confirmation must remain visible in meal fullscreen');
-  const recordingStatus = patientPage.indexOf('id="local-recording-status"');
-  assert.ok(recordingStatus > mainStart && recordingStatus < mainEnd, 'recording state must remain visible in meal fullscreen');
-  assert.doesNotMatch(patientPage.slice(0, mainStart), /local-recording-connect-panel|local-recording-connect-status/);
-  for (const id of ['meal-recording-choice-record','meal-recording-choice-no-record','meal-recording-choice-cancel','local-recording-connect']) {
-    assert.match(patientPage,new RegExp(`id="${id}"`));
+  for (const id of ['local-recording-connect-panel','local-recording-connect-status','local-recording-connect','local-recording-live','local-recording-privacy','local-recording-status']) {
+    const at=patientPage.indexOf(`id="${id}"`);
+    assert.ok(at>mainStart&&at<mainEnd,`${id} must be available inline in the patient page`);
   }
+  const privacyText=patientPage.match(/<section id="local-recording-privacy"[^>]*>([^<]+)<\/section>/)?.[1]||'';
+  const privacyStart=patientPage.indexOf('id="local-recording-privacy"');
+  const connectionEnd=patientPage.indexOf('</section>',patientPage.indexOf('id="local-recording-connect-panel"'));
+  assert.ok(privacyStart>connectionEnd&&privacyStart<mainEnd,'privacy disclosure must remain outside the hideable connection panel');
+  assert.match(patientPage,/id="local-recording-privacy"[^>]*aria-label="錄影隱私說明"/);
+  assert.doesNotMatch(patientPage.slice(privacyStart-20,privacyStart+120),/\shidden(?:\s|>)/);
+  assert.match(privacyText,/無聲影片/);
+  assert.match(privacyText,/只保存在這台電腦/);
+  assert.match(privacyText,/不會上傳到 Supabase/);
+  assert.match(privacyText,/照護端.*啟用.*本機服務連線時.*自動/);
+  assert.doesNotMatch(patientPage, /meal-recording-confirm-dialog|meal-recording-choice-(?:record|no-record|cancel)|meal-recording-confirm-status/);
+  assert.doesNotMatch(patientPage.slice(0, mainStart), /local-recording-connect-panel|local-recording-connect-status/);
 });
 
 test('caregiver recording connection controls live inside the recording panel instead of a persistent top toolbar', () => {

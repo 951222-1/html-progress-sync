@@ -22,6 +22,16 @@ test('case-specific local video panel plays real API URLs and seeks ten seconds 
  const mark=all(d.nodes.get('local-recording-marks')).find(e=>e.dataset.action==='seek');assert.ok(mark);await mark.fire('click');assert.equal(v.currentTime,15);
  await p.setPatient({id:'00000000-0000-4000-8000-000000000004',recording_enabled:false});assert.equal(v.hidden,true);assert.equal(d.nodes.get('local-recording-marks').children.length,0);p.destroy();
 });
+test('disabled recording state points to the caregiver control rather than a removed patient checkbox',async()=>{
+ const d=dom(),api={request:async()=>[]};
+ const p=panel.mount({api,document:d.document,autoRefresh:false});
+ await p.setPatient({id:ids.patient,recording_enabled:false});
+ const text=d.nodes.get('local-recording-empty').textContent;
+ assert.match(text,/照護端/);
+ assert.doesNotMatch(text,/新增個案時可勾選/);
+ p.destroy();
+});
+
 test('failed recordings show the local quota/failure reason without using HTML insertion',async()=>{
  const d=dom(),failure='本機錄影資料夾已達設定容量上限；原始分塊保留於本機。';
  const row={...recording,status:'failed',error_message:failure};

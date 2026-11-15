@@ -5,20 +5,16 @@ const bridge=require('../local_recording/bridge.js');
 
 const envelope=(data,error=null)=>({data,error});
 function response(data,status=200){return {ok:status>=200&&status<300,status,json:async()=>data};}
+function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
 const config={mode:'local-recording',csrf_token:'synthetic-csrf-token',ffmpeg_available:true};
 
-function startPromptHarness({serviceAvailable=true,consentEnabled=true,dialogAvailable=true,showModalThrows=false,startBarrier=null}={}){
- const calls=[];let mealActive=false;
- const makeElement=id=>({id,hidden:id==='meal-recording-choice-record',textContent:'',dataset:{},listeners:{},addEventListener(type,fn){(this.listeners[type]||(this.listeners[type]=[])).push(fn);},removeEventListener(type,fn){this.listeners[type]=(this.listeners[type]||[]).filter(value=>value!==fn);},click(){for(const fn of [...(this.listeners.click||[])])fn({target:this,preventDefault(){}});}});
- const dialog=makeElement('meal-recording-confirm-dialog');dialog.open=false;dialog.showModal=()=>{if(showModalThrows)throw Error('dialog unavailable');dialog.open=true;};dialog.close=()=>{dialog.open=false;};
+function startMealHarness({serviceAvailable=true,consentEnabled=true,consentReadFails=false,consentReadQueue=[],startBarrier=null}={}){
+ const calls=[],consentSetting={value:consentEnabled},queuedConsentReads=[...consentReadQueue];let mealActive=false;
+ const makeElement=id=>({id,hidden:false,textContent:'',dataset:{},listeners:{},addEventListener(type,fn){(this.listeners[type]||(this.listeners[type]=[])).push(fn);},removeEventListener(type,fn){this.listeners[type]=(this.listeners[type]||[]).filter(value=>value!==fn);},click(){for(const fn of [...(this.listeners.click||[])])fn({target:this,preventDefault(){}});}});
  const elements={
-  'meal-recording-confirm-dialog':dialog,'local-recording-connect':makeElement('local-recording-connect'),
-  'local-recording-connect-panel':{hidden:false},'local-recording-status':{hidden:true,textContent:'',dataset:{}},
-  'meal-recording-choice-record':makeElement('meal-recording-choice-record'),
-  'meal-recording-choice-no-record':makeElement('meal-recording-choice-no-record'),
-  'meal-recording-choice-cancel':makeElement('meal-recording-choice-cancel')
+  'local-recording-connect':makeElement('local-recording-connect'),
+  'local-recording-connect-panel':{hidden:false},'local-recording-privacy':{hidden:false,role:'region',ariaLabel:'錄影隱私說明'},'local-recording-status':{hidden:true,textContent:'',dataset:{}}
  };
- if(!dialogAvailable)delete elements['meal-recording-confirm-dialog'];
  const recorder={begin:(profile,session)=>calls.push(['recording-begin',profile,session]),selectPatient(){},end:async()=>null,getState:()=>({active:false})};
  const channelRef={current:null};
  class FakeBroadcastChannel{constructor(name){this.name=name;this.onmessage=null;channelRef.current=this;}postMessage(data){this.onmessage?.({data});}close(){this.onmessage=null;}}
@@ -26,16 +22,17 @@ function startPromptHarness({serviceAvailable=true,consentEnabled=true,dialogAva
  const root={
   location:{href:'http://127.0.0.1:8123/mobile/index.html'},performance:{now:()=>1000},currentPatient:null,BroadcastChannel:FakeBroadcastChannel,
   document,
-  fetch:async(url,options={})=>{calls.push(['fetch',url,String(options.method||'GET').toUpperCase()]);if(url.endsWith('/config')){if(!serviceAvailable)throw Error('companion offline');return response(envelope(config));}return response(envelope({patient_id:'synthetic-patient',recording_enabled:consentEnabled}));},
+  fetch:async(url,options={})=>{calls.push(['fetch',url,String(options.method||'GET').toUpperCase()]);if(url.endsWith('/config')){if(!serviceAvailable)throw Error('companion offline');return response(envelope(config));}if(consentReadFails)throw Error('consent unavailable');if(queuedConsentReads.length){const row=await queuedConsentReads.shift();if(row instanceof Error)throw row;return response(envelope(row));}return response(envelope({patient_id:'synthetic-patient',recording_enabled:consentSetting.value}));},
   supabaseClient:{auth:{getSession:async()=>({data:{session:{access_token:'synthetic-jwt'}},error:null}),signOut:async()=>({error:null})}},
   LocalRecordingUI:{initialize:()=>recorder,selectPatient(){}},
   getCurrentMealSessionInsertPromise:()=>Promise.resolve('22222222-2222-4222-8222-222222222222'),
   applySelectedPatientProfile(profile){this.currentPatient=profile;return true;},
+  async saveAndLoginNewPatient(){calls.push(['new-patient-created']);this.currentPatient={id:'synthetic-new-patient',patient_code:'P-NEW',recording_enabled:false};},
   startMealSession:async function(){calls.push(['original-start']);if(startBarrier)await startBarrier;mealActive=true;calls.push(['original-start-complete']);},endMealSession(){mealActive=false;},isMealSessionActive:()=>mealActive
  };
  bridge.attach(root);
  root.applySelectedPatientProfile({id:'synthetic-patient',patient_code:'P-SYN',recording_enabled:false});
- return {root,calls,elements,dialog,channelRef};
+ return {root,calls,elements,channelRef,consentSetting};
 }
 
 test('local API obtains only the existing Supabase access token and adds localhost CSRF on writes',async()=>{
@@ -74,18 +71,14 @@ test('patient bridge follows the existing meal lifecycle, captures completed fra
  const calls=[],sessionPromise=Promise.resolve('22222222-2222-4222-8222-222222222222'),eventId='11111111-1111-4111-8111-111111111111';
  let mealActive=false,releaseRecordingEnd;
  const canvas={tag:'ai-canvas'},status={hidden:true,textContent:'',dataset:{}};
- const makeControl=id=>({id,hidden:id==='meal-recording-choice-record',textContent:'',dataset:{},listeners:{},addEventListener(type,fn){(this.listeners[type]||(this.listeners[type]=[])).push(fn);},removeEventListener(type,fn){this.listeners[type]=(this.listeners[type]||[]).filter(value=>value!==fn);},click(){for(const fn of [...(this.listeners.click||[])])fn({target:this,preventDefault(){}});}});
- const dialog=makeControl('meal-recording-confirm-dialog');dialog.open=false;dialog.showModal=()=>{dialog.open=true;};dialog.close=()=>{dialog.open=false;};
+ const makeControl=id=>({id,disabled:false,hidden:false,textContent:'',dataset:{},listeners:{},addEventListener(type,fn){(this.listeners[type]||(this.listeners[type]=[])).push(fn);},removeEventListener(type,fn){this.listeners[type]=(this.listeners[type]||[]).filter(value=>value!==fn);}});
  const connectButton=makeControl('local-recording-connect'),connectPanel={hidden:false};
- const recordChoice=makeControl('meal-recording-choice-record'),noRecordChoice=makeControl('meal-recording-choice-no-record'),cancelChoice=makeControl('meal-recording-choice-cancel');
  const recorder={begin:(profile,session)=>calls.push(['begin',profile,session]),captureFrame:(frame,time)=>calls.push(['frame',frame,time]),trackCoughEvent:(promise,time,kind,session)=>{calls.push(['cough-promise',promise,time,kind,session]);return Promise.resolve();},end:()=>{calls.push(['recording-end']);return new Promise(resolve=>releaseRecordingEnd=resolve);},getState:()=>({active:false})};
  const root={
   location:{href:'http://127.0.0.1:8123/mobile/index.html'},performance:{now:()=>4321},
   document:{getElementById:id=>({
-   'ai-canvas':canvas,'local-recording-status':status,'meal-recording-confirm-dialog':dialog,
-   'local-recording-connect':connectButton,'local-recording-connect-panel':connectPanel,
-   'meal-recording-choice-record':recordChoice,'meal-recording-choice-no-record':noRecordChoice,
-   'meal-recording-choice-cancel':cancelChoice
+   'ai-canvas':canvas,'local-recording-status':status,
+   'local-recording-connect':connectButton,'local-recording-connect-panel':connectPanel
   })[id]||null,createElement:()=>({append(){}}),addEventListener(){}},
   fetch:async(url,options)=>{calls.push(['fetch',url,options]);if(url.endsWith('/playback-session/revoke'))throw Error('synthetic local outage');return response(envelope(url.endsWith('/config')?config:{patient_id:'synthetic-patient',recording_enabled:true}));},
   supabaseClient:{auth:{getSession:async()=>({data:{session:{access_token:'existing-jwt'}},error:null}),signOut:async()=>{calls.push(['supabase-signout']);return {error:null};}}},
@@ -104,12 +97,9 @@ test('patient bridge follows the existing meal lifecycle, captures completed fra
  await new Promise(resolve=>setImmediate(resolve));
  const startPromise=root.startMealSession();
  await new Promise(resolve=>setImmediate(resolve));
- assert.equal(dialog.open,true,'meal startup must pause on the confirmation dialog');
- assert.equal(calls.some(x=>x[0]==='original-start'),false,'camera/meal startup must wait for the user choice');
- assert.equal(recordChoice.hidden,false,'recording choice is available only when service and caregiver consent are ready');
- recordChoice.click();
  await startPromise;
- assert.equal(dialog.open,false);
+ assert.equal(root.document.getElementById('meal-recording-confirm-dialog'),null,'the patient bridge must not require the removed confirmation dialog');
+ assert.ok(calls.some(x=>x[0]==='original-start'),'meal startup should proceed immediately');
  assert.equal(calls.find(x=>x[0]==='begin')[1].recording_enabled,true);
  assert.equal(calls.find(x=>x[0]==='begin')[2],sessionPromise);
  await root.processVideoFrame(1000);
@@ -127,68 +117,121 @@ test('patient bridge follows the existing meal lifecycle, captures completed fra
  assert.match(status.textContent,/五分鐘/);
 });
 
-test('per-meal opt-out still starts monitoring without recording or changing saved consent',async()=>{
- const {root,calls,elements,dialog}=startPromptHarness({serviceAvailable:true,consentEnabled:true});
+test('meal starts without a dialog and automatically records when consent is saved and the local service is connected', async () => {
+ const {root,calls}=startMealHarness({serviceAvailable:true,consentEnabled:true});
  await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
- const start=root.startMealSession();await new Promise(resolve=>setImmediate(resolve));
- assert.equal(dialog.open,true);assert.equal(elements['meal-recording-choice-record'].hidden,false);
- elements['meal-recording-choice-no-record'].click();await start;
- assert.ok(calls.some(call=>call[0]==='original-start'));
- assert.equal(calls.filter(call=>call[0]==='recording-begin').length,0);
- assert.equal(calls.some(call=>call[0]==='fetch'&&call[2]==='PUT'),false);
+ await root.startMealSession();
+ const mealStart=calls.findIndex(call=>call[0]==='original-start');
+ const recordingStart=calls.findIndex(call=>call[0]==='recording-begin');
+ assert.ok(mealStart>=0,'meal monitoring should start without a confirmation dialog');
+ assert.ok(recordingStart>mealStart,'recording should start automatically after meal startup');
+ assert.equal(calls[recordingStart][1].recording_enabled,true);
 });
 
-test('offline companion hides record consent choice but allows an explicit no-record start',async()=>{
- const {root,calls,elements,dialog}=startPromptHarness({serviceAvailable:false,consentEnabled:true});
+test('privacy disclosure remains visible after the connection panel hides',async()=>{
+ const {elements}=startMealHarness({serviceAvailable:true});
+ await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
+ assert.equal(elements['local-recording-connect-panel'].hidden,true);
+ assert.equal(elements['local-recording-privacy'].hidden,false);
+ assert.equal(elements['local-recording-privacy'].ariaLabel,'錄影隱私說明');
+});
+
+test('meal startup does not wait for a pending post-start consent refresh',async()=>{
+ const refresh=deferred();
+ const {root,calls}=startMealHarness({serviceAvailable:true,consentEnabled:true,consentReadQueue:[Promise.resolve({recording_enabled:true}),refresh.promise]});
  await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
  const start=root.startMealSession();await new Promise(resolve=>setImmediate(resolve));
- assert.equal(dialog.open,true);assert.equal(elements['meal-recording-choice-record'].hidden,true);
- assert.equal(elements['meal-recording-choice-no-record'].hidden,false);
- elements['meal-recording-choice-no-record'].click();await start;
+ assert.ok(calls.some(call=>call[0]==='original-start'),'meal monitoring must start before the consent refresh resolves');
+ assert.equal(calls.some(call=>call[0]==='recording-begin'),false);
+ refresh.resolve({recording_enabled:true});
+ await start;
+ assert.ok(calls.some(call=>call[0]==='recording-begin'));
+});
+
+test('profile without saved caregiver recording setting starts without recording',async()=>{
+ const {root,calls,elements}=startMealHarness({serviceAvailable:true,consentEnabled:false});
+ await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
+ await root.startMealSession();
  assert.ok(calls.some(call=>call[0]==='original-start'));
  assert.equal(calls.some(call=>call[0]==='recording-begin'),false);
+ assert.match(elements['local-recording-status'].textContent,/尚未為此個案啟用/);
 });
 
-test('canceling the meal confirmation starts nothing and exits fullscreen',async()=>{
- const {root,calls,elements,dialog}=startPromptHarness({serviceAvailable:true,consentEnabled:true});
+test('creating a patient does not write recording consent from the patient-side flow',async()=>{
+ const {root,calls}=startMealHarness({serviceAvailable:true,consentEnabled:false});
  await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
- root.document.fullscreenElement={tag:'main'};
- const start=root.startMealSession();await new Promise(resolve=>setImmediate(resolve));
- assert.equal(dialog.open,true);
- elements['meal-recording-choice-cancel'].click();await start;
- assert.equal(dialog.open,false);
- assert.equal(calls.some(call=>call[0]==='original-start'),false);
+ await root.saveAndLoginNewPatient();
+ assert.ok(calls.some(call=>call[0]==='new-patient-created'));
+ assert.ok(calls.some(call=>call[0]==='fetch'&&call[1].includes('/consent?patient_id=synthetic-new-patient')));
+ assert.equal(calls.some(call=>call[0]==='fetch'&&call[1].includes('/consent')&&call[2]==='PUT'),false);
+});
+
+test('offline local service starts the meal without recording',async()=>{
+ const {root,calls,elements}=startMealHarness({serviceAvailable:false,consentEnabled:true});
+ await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
+ await root.startMealSession();
+ assert.ok(calls.some(call=>call[0]==='original-start'));
  assert.equal(calls.some(call=>call[0]==='recording-begin'),false);
- assert.ok(calls.some(call=>call[0]==='exit-fullscreen'));
+ assert.match(elements['local-recording-status'].textContent,/服務未連線/);
 });
 
-test('stale recording choice does not silently become a no-record start after consent is revoked',async()=>{
- const {root,calls,elements,dialog,channelRef}=startPromptHarness({serviceAvailable:true,consentEnabled:true});
+test('unreadable caregiver setting fails closed and starts the meal without recording',async()=>{
+ const {root,calls,elements}=startMealHarness({serviceAvailable:true,consentEnabled:true,consentReadFails:true});
+ await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
+ await root.startMealSession();
+ assert.ok(calls.some(call=>call[0]==='original-start'));
+ assert.equal(calls.some(call=>call[0]==='recording-begin'),false);
+ assert.match(elements['local-recording-status'].textContent,/無法確認/);
+});
+
+test('consent response without an explicit boolean fails closed',async()=>{
+ const {root,calls,elements}=startMealHarness({serviceAvailable:true,consentEnabled:true,consentReadQueue:[Promise.resolve({recording_enabled:true}),Promise.resolve({})]});
+ await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
+ await root.startMealSession();
+ assert.ok(calls.some(call=>call[0]==='original-start'));
+ assert.equal(calls.some(call=>call[0]==='recording-begin'),false);
+ assert.match(elements['local-recording-status'].textContent,/無法確認/);
+});
+
+test('an enabled broadcast cannot authorize recording when the fresh caregiver setting cannot be read',async()=>{
+ let releaseCameraStart;
+ const freshRead=deferred();
+ const cameraStartup=new Promise(resolve=>releaseCameraStart=resolve);
+ const {root,calls,channelRef}=startMealHarness({serviceAvailable:true,consentEnabled:true,consentReadQueue:[Promise.resolve({recording_enabled:true}),Promise.resolve({recording_enabled:true}),freshRead.promise],startBarrier:cameraStartup});
  await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
  const start=root.startMealSession();await new Promise(resolve=>setImmediate(resolve));
- assert.equal(elements['meal-recording-choice-record'].hidden,false);
+ assert.ok(calls.some(call=>call[0]==='original-start'));
+ channelRef.current.onmessage({data:{patientId:'synthetic-patient',enabled:true}});
+ await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
+ releaseCameraStart();await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
+ freshRead.resolve(new Error('fresh consent read unavailable'));
+ await start;
+ assert.equal(calls.some(call=>call[0]==='recording-begin'),false);
+ assert.match(root.document.getElementById('local-recording-status').textContent,/無法確認/);
+});
+
+test('revocation invalidates an in-flight fresh consent read before recording can begin',async()=>{
+ const freshRead=deferred();
+ const {root,calls,channelRef,consentSetting}=startMealHarness({serviceAvailable:true,consentEnabled:true,consentReadQueue:[Promise.resolve({recording_enabled:true}),freshRead.promise]});
+ await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
+ const start=root.startMealSession();await new Promise(resolve=>setImmediate(resolve));
+ assert.ok(calls.some(call=>call[0]==='original-start-complete'));
+ consentSetting.value=false;
  channelRef.current.onmessage({data:{patientId:'synthetic-patient',enabled:false}});
- assert.equal(elements['meal-recording-choice-record'].hidden,true);
- elements['meal-recording-choice-record'].click();
- await new Promise(resolve=>setImmediate(resolve));
- assert.equal(dialog.open,true,'stale record click must leave dialog open for a new explicit choice');
- assert.equal(calls.some(call=>call[0]==='original-start'),false);
- elements['meal-recording-choice-no-record'].click();await start;
- assert.ok(calls.some(call=>call[0]==='original-start'));
+ freshRead.resolve({recording_enabled:true});
+ await start;
  assert.equal(calls.some(call=>call[0]==='recording-begin'),false);
 });
 
-test('consent revoked while camera startup is pending prevents the meal from becoming a recording',async()=>{
+test('consent revoked while camera startup is pending prevents automatic recording',async()=>{
  let releaseCameraStart;
  const cameraStartup=new Promise(resolve=>releaseCameraStart=resolve);
- const {root,calls,elements,channelRef}=startPromptHarness({serviceAvailable:true,consentEnabled:true,startBarrier:cameraStartup});
+ const {root,calls,channelRef,consentSetting}=startMealHarness({serviceAvailable:true,consentEnabled:true,startBarrier:cameraStartup});
  await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
  const start=root.startMealSession();await new Promise(resolve=>setImmediate(resolve));
- assert.equal(elements['meal-recording-choice-record'].hidden,false);
- elements['meal-recording-choice-record'].click();
- await new Promise(resolve=>setImmediate(resolve));
- assert.ok(calls.some(call=>call[0]==='original-start'));
- assert.equal(calls.some(call=>call[0]==='original-start-complete'),false);
+ assert.ok(calls.some(x=>x[0]==='original-start'));
+ assert.equal(calls.some(x=>x[0]==='original-start-complete'),false);
+ consentSetting.value=false;
  channelRef.current.onmessage({data:{patientId:'synthetic-patient',enabled:false}});
  releaseCameraStart();
  await start;
@@ -196,27 +239,27 @@ test('consent revoked while camera startup is pending prevents the meal from bec
  assert.equal(calls.some(call=>call[0]==='recording-begin'),false);
 });
 
-test('start without a patient profile still requires the no-record confirmation',async()=>{
- const {root,calls,elements,dialog}=startPromptHarness({serviceAvailable:true,consentEnabled:true});
- root.currentPatient=null;
+test('fresh consent is rechecked after camera startup even when a revoke message is missed',async()=>{
+ let releaseCameraStart;
+ const cameraStartup=new Promise(resolve=>releaseCameraStart=resolve);
+ const {root,calls,consentSetting}=startMealHarness({serviceAvailable:true,consentEnabled:true,startBarrier:cameraStartup});
  await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
  const start=root.startMealSession();await new Promise(resolve=>setImmediate(resolve));
- assert.equal(dialog.open,true);assert.equal(elements['meal-recording-choice-record'].hidden,true);
- assert.equal(calls.some(call=>call[0]==='original-start'),false);
- elements['meal-recording-choice-no-record'].click();await start;
  assert.ok(calls.some(call=>call[0]==='original-start'));
+ consentSetting.value=false;
+ releaseCameraStart();await start;
+ assert.ok(calls.some(call=>call[0]==='original-start-complete'));
  assert.equal(calls.some(call=>call[0]==='recording-begin'),false);
 });
 
-test('meal startup fails closed if the confirmation dialog is missing or cannot open',async()=>{
- for(const options of [{dialogAvailable:false},{showModalThrows:true}]){
-  const {root,calls,elements}=startPromptHarness({serviceAvailable:true,consentEnabled:true,...options});
-  await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
-  await root.startMealSession();
-  assert.equal(calls.some(call=>call[0]==='original-start'),false);
-  assert.equal(calls.some(call=>call[0]==='recording-begin'),false);
-  assert.match(elements['local-recording-status'].textContent,/確認|取消/);
- }
+test('start without a patient profile proceeds without recording',async()=>{
+ const {root,calls,elements}=startMealHarness({serviceAvailable:true,consentEnabled:true});
+ await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
+ root.currentPatient=null;
+ await root.startMealSession();
+ assert.ok(calls.some(call=>call[0]==='original-start'));
+ assert.equal(calls.some(call=>call[0]==='recording-begin'),false);
+ assert.match(elements['local-recording-status'].textContent,/未選擇個案/);
 });
 
 test('logout revokes the local playback capability before Supabase clears the active JWT',async()=>{
