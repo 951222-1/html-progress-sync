@@ -613,7 +613,7 @@ class LocalHTTPTests(unittest.TestCase):
         self.assertEqual(html.encode('utf-8'), self.index_before)
         with urlopen(self.base + '/mobile/caregiver.html', timeout=5) as response:
             caregiver_html = response.read().decode('utf-8')
-        self.assertIn('本機整餐錄影與回看', caregiver_html)
+        self.assertIn('本機整餐影片', caregiver_html)
         self.assertIn('id="local-recording-connect"', caregiver_html)
         self.assertIn('id="local-recording-consent-toggle"', caregiver_html)
         self.assertIn('id="local-recording-player"', caregiver_html)

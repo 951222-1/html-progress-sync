@@ -72,6 +72,20 @@ test('patient recording confirmation is nested in the fullscreen main and remove
   }
 });
 
+test('caregiver recording connection controls live inside the recording panel instead of a persistent top toolbar', () => {
+  const mainStart = caregiverPage.indexOf('<main');
+  const mainEnd = caregiverPage.indexOf('</main>', mainStart);
+  const panelStart = caregiverPage.indexOf('id="local-recording-panel"');
+  const panelEnd = caregiverPage.indexOf('</section>', panelStart);
+  const connectPanel = caregiverPage.indexOf('id="local-recording-connect-panel"');
+  const status = caregiverPage.indexOf('id="local-recording-panel-status"');
+  assert.ok(mainStart >= 0 && mainEnd > mainStart);
+  assert.ok(panelStart > mainEnd && panelEnd > panelStart);
+  assert.ok(connectPanel > panelStart && connectPanel < panelEnd, 'connect control belongs in the existing video panel');
+  assert.ok(status > panelStart && status < panelEnd, 'connection status belongs in the existing video panel');
+  assert.doesNotMatch(caregiverPage.slice(0, mainStart), /local-recording-connect-panel|local-recording-panel-status/);
+});
+
 test('both endpoints load shared authentication and private-channel support', () => {
   assert.match(patientPage, /auth-ui\.js/);
   assert.match(caregiverPage, /auth-ui\.js/);

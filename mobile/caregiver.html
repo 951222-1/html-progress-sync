@@ -67,15 +67,6 @@
         </div>
     </section>
 
-    <section id="local-recording-connect-panel" class="ui-refresh-toolbar ui-refresh-toolbar--caregiver ui-recording-connect" aria-label="本機錄影連線">
-        <div class="ui-refresh-clock">
-            <p class="ui-refresh-greeting">本機整餐錄影與回看</p>
-            <p id="local-recording-connect-status" class="ui-recording-note">無聲影片與同意狀態只留在這台電腦，不會上傳至 Supabase；Pages 使用時請啟動本機服務並允許本機網路存取。</p>
-            <p id="local-recording-panel-status" role="status" aria-live="polite" class="ui-recording-status" hidden></p>
-        </div>
-        <button id="local-recording-connect" type="button" class="ui-recording-connect-button">連接本機服務</button>
-    </section>
-
     <!-- 主要 Dashboard 內容網格 -->
     <main class="flex-1 p-6 max-w-7xl w-full mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
 
@@ -230,6 +221,11 @@
                 </div>
                 <button id="local-recordings-refresh" type="button" class="ui-recording-secondary-button">重新整理影片</button>
             </div>
+            <div id="local-recording-connect-panel" class="ui-recording-connect-panel" aria-label="本機錄影連線">
+                <p id="local-recording-connect-status" class="ui-recording-note">需要本機服務才能讀取及管理影片；影片與同意狀態只留在這台電腦。</p>
+                <button id="local-recording-connect" type="button" class="ui-recording-connect-button">連接本機服務</button>
+            </div>
+            <p id="local-recording-panel-status" role="status" aria-live="polite" class="ui-recording-status" hidden></p>
             <label for="local-recording-consent-toggle" class="ui-recording-consent">
                 <input id="local-recording-consent-toggle" type="checkbox" disabled>
                 <span><strong>此個案同意在這台電腦進行整餐無聲錄影</strong><br>同意狀態只留在本機。</span>
