@@ -131,10 +131,10 @@
   const doc=root.document,save=doc?.getElementById('btn-save-new-patient');
   if(!save||doc.getElementById('new-patient-local-recording'))return;
   const label=doc.createElement('label');label.id='new-patient-local-recording-label';label.className='ui-patient-recording-optin';
-  const input=doc.createElement('input');input.type='checkbox';input.id='new-patient-local-recording';input.checked=false;input.className='ui-patient-recording-optin-checkbox';
+  const input=doc.createElement('input');input.type='checkbox';input.id='new-patient-local-recording';input.checked=true;input.className='ui-patient-recording-optin-checkbox';
   const copy=doc.createElement('span');copy.className='ui-patient-recording-optin-copy';
   const title=doc.createElement('strong');title.className='ui-patient-recording-optin-title';title.textContent='需要整餐錄影（只有影像，不收錄音）';
-  const details=doc.createElement('span');details.className='ui-patient-recording-optin-details';details.textContent='勾選代表已向本人或有權代理人說明並取得同意。只錄無聲影像、保存在本機，不會上傳到 Supabase；本機服務連線後才會保存設定，照護端可關閉。';
+  const details=doc.createElement('span');details.className='ui-patient-recording-optin-details';details.textContent='預設啟用整餐無聲錄影；如本個案不需錄影可取消勾選。開始前請口頭提醒本人。影片只保存在這台電腦，不會上傳到 Supabase；本機錄影服務連線後才會保存設定，照護端可關閉。';
   copy.append(title,details);label.append(input,copy);
   save.parentElement?.parentElement?.insertBefore(label,save.parentElement);
  }

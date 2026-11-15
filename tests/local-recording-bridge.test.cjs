@@ -167,7 +167,7 @@ test('unchecked new-patient opt-in explicitly keeps recording disabled',async()=
  const {root,calls,elements,consentSetting}=startMealHarness({serviceAvailable:true,consentEnabled:true,includePatientForm:true});
  await root.LocalRecordingBridge.connect();
  const optIn=(function flatten(node){return [node,...(node.children||[]).flatMap(flatten)];})(elements['patient-add-view']).find(node=>node.id==='new-patient-local-recording');
- assert.ok(optIn);assert.equal(optIn.checked,false);
+ assert.ok(optIn);optIn.checked=false;assert.equal(optIn.checked,false);
  await root.saveAndLoginNewPatient();
  assert.ok(calls.some(call=>call[0]==='new-patient-created'));
  assert.ok(calls.some(call=>call[0]==='fetch'&&call[1].includes('/consent')&&call[2]==='PUT'));
@@ -177,17 +177,17 @@ test('unchecked new-patient opt-in explicitly keeps recording disabled',async()=
  assert.equal(calls.some(call=>call[0]==='recording-begin'),false);
 });
 
-test('new patient form provides an explicit unchecked local silent-recording opt-in',()=>{
+test('new patient form defaults to enabled local silent recording with clear notice',()=>{
  const {elements}=startMealHarness({includePatientForm:true});
  const form=elements['patient-add-view'];
  const nodes=(function flatten(node){return [node,...(node.children||[]).flatMap(flatten)];})(form);
  const checkbox=nodes.find(node=>node.id==='new-patient-local-recording');
- assert.ok(checkbox,'new patient form should expose the recording opt-in');
- assert.equal(checkbox.checked,false,'the opt-in must be unchecked by default');
+ assert.ok(checkbox,'new patient form should expose the recording setting');
+ assert.equal(checkbox.checked,true,'recording should be enabled by default as shown in the approved form');
  const copy=nodes.map(node=>node.textContent).join(' ');
- assert.match(copy,/本人或有權代理人/);
+ assert.match(copy,/預設啟用/);
  assert.match(copy,/無聲|不收錄音/);
- assert.match(copy,/本機服務連線後才會保存設定/);
+ assert.match(copy,/本機錄影服務連線後才會保存設定/);
  assert.match(copy,/不會上傳到 Supabase/);
 });
 
@@ -228,6 +228,7 @@ test('checked offline opt-in still starts the meal without recording',async()=>{
 test('offline unchecked onboarding cannot inherit a stale enabled value after reconnect',async()=>{
  const {root,calls,elements,consentSetting,serviceState}=startMealHarness({serviceAvailable:false,consentEnabled:true,includePatientForm:true});
  const checkbox=(function flatten(node){return [node,...(node.children||[]).flatMap(flatten)];})(elements['patient-add-view']).find(node=>node.id==='new-patient-local-recording');
+ checkbox.checked=false;
  assert.equal(checkbox.checked,false);
  await root.saveAndLoginNewPatient();
  serviceState.value=true;
