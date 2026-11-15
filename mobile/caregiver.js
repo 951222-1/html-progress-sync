@@ -770,14 +770,50 @@ function handleStateUpdate(state) {
 function showCaregiverAlert(level, message = null) {
     const banner = document.getElementById('caregiver-alert-banner');
     const text = document.getElementById('caregiver-alert-text');
-    text.innerText = message || `觸發 ${level} 嚴重警報！請立即關注個案`;
+    const resolvedMsg = message || `觸發 ${level} 嚴重警報！請立即關注個案`;
+    text.innerText = resolvedMsg;
     banner.classList.remove('hidden');
     playBuzzerSound();
+    if (level === 'L4') {
+        showL4WebNotificationToast(resolvedMsg);
+    }
 }
 
 function hideCaregiverAlert() {
     document.getElementById('caregiver-alert-banner').classList.add('hidden');
+    dismissL4WebNotificationToast();
     stopBuzzerSound();
+}
+
+function showL4WebNotificationToast(message) {
+    const toast = document.getElementById('l4-web-notification-toast');
+    if (toast) {
+        const timeEl = document.getElementById('l4-web-notification-time');
+        const titleEl = document.getElementById('l4-web-notification-title');
+        const bodyEl = document.getElementById('l4-web-notification-body');
+        const statusEl = document.getElementById('l4-web-notification-status');
+        const patientNameEl = document.getElementById('caregiver-patient-name');
+        const patientName = (patientNameEl && patientNameEl.innerText) ? patientNameEl.innerText : '監看個案';
+        if (timeEl) timeEl.textContent = new Date().toTimeString().split(' ')[0];
+        if (titleEl) titleEl.textContent = `L4 進食安全提醒（${patientName}）`;
+        if (bodyEl) bodyEl.textContent = message;
+        if (statusEl) statusEl.textContent = '🔔 照護端網頁即時通知已跳出（已同步觸發 Gmail 通知）';
+        toast.classList.remove('hidden');
+    }
+    try {
+        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+            new Notification('🚨 L4 進食安全提醒（急性哽噎）', { body: message });
+        }
+    } catch (e) {}
+}
+
+function dismissL4WebNotificationToast() {
+    const toast = document.getElementById('l4-web-notification-toast');
+    if (toast) toast.classList.add('hidden');
+}
+if (typeof window !== 'undefined') {
+    window.showL4WebNotificationToast = showL4WebNotificationToast;
+    window.dismissL4WebNotificationToast = dismissL4WebNotificationToast;
 }
 
 function addRealtimeLog(level, msg) {

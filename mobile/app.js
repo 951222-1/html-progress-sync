@@ -855,7 +855,24 @@ window.isMealSessionActive = () => Boolean(isMealActive);
 window.isPatientKioskLocked = () => Boolean(isKioskLocked);
 window.startMealSession = startMealSession;
 window.endMealSession = endMealSession;
+function toggleHudStatsDetails() {
+    const details = document.getElementById('hud-stats-details');
+    const btn = document.getElementById('btn-toggle-hud-stats');
+    if (!details) return;
+    const isHidden = details.classList.toggle('hidden');
+    if (btn) btn.textContent = isHidden ? '展開' : '收合';
+}
+
+let visionFileset = null;
+let visionFaceClass = null;
+let visionHandClass = null;
+let visionCpuFallbackTriggered = false;
+let lastVisionTimestampMs = 0;
+
 window.dismissAlertOverlay = dismissAlertOverlay;
+window.showL4WebNotificationToast = showL4WebNotificationToast;
+window.dismissL4WebNotificationToast = dismissL4WebNotificationToast;
+window.toggleHudStatsDetails = toggleHudStatsDetails;
 
 // 🎯 事件委派 (雲端個案按鈕點擊進入待機)
 document.addEventListener('click', (evt) => {
@@ -869,20 +886,52 @@ document.addEventListener('click', (evt) => {
     }
 });
 
+async function fallbackVisionToCpu(reasonErr) {
+    if (visionCpuFallbackTriggered || !visionFileset || !visionFaceClass || !visionHandClass) return;
+    visionCpuFallbackTriggered = true;
+    console.warn('[MediaPipe] Runtime GPU detection failed, switching Landmarkers to CPU delegate:', reasonErr);
+    try {
+        faceLandmarker = await visionFaceClass.createFromOptions(visionFileset, {
+            baseOptions: {
+                modelAssetPath: `https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task`,
+                delegate: "CPU"
+            },
+            runningMode: "VIDEO",
+            numFaces: 1
+        });
+        handLandmarker = await visionHandClass.createFromOptions(visionFileset, {
+            baseOptions: {
+                modelAssetPath: `https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task`,
+                delegate: "CPU"
+            },
+            runningMode: "VIDEO",
+            numHands: 2
+        });
+        lastVisionTimestampMs = 0;
+        const aiStatus = document.getElementById('hud-ai-status');
+        if (aiStatus) {
+            aiStatus.innerText = '🟢 已就緒 (CPU)';
+            aiStatus.className = 'font-bold text-emerald-400';
+        }
+    } catch (cpuErr) {
+        console.error('[MediaPipe] Runtime CPU fallback failed:', cpuErr);
+    }
+}
+
 async function initMediaPipe() {
     const aiStatus = document.getElementById('hud-ai-status');
     try {
-        let Resolver = window.FilesetResolver || (window.tasksVision && window.tasksVision.FilesetResolver);
-        let FaceL = window.FaceLandmarker || (window.tasksVision && window.tasksVision.FaceLandmarker);
-        let HandL = window.HandLandmarker || (window.tasksVision && window.tasksVision.HandLandmarker);
+        let Resolver = window.FilesetResolver || (window.tasksVision && (window.tasksVision.FilesetResolver || (window.tasksVision.default && window.tasksVision.default.FilesetResolver)));
+        let FaceL = window.FaceLandmarker || (window.tasksVision && (window.tasksVision.FaceLandmarker || (window.tasksVision.default && window.tasksVision.default.FaceLandmarker)));
+        let HandL = window.HandLandmarker || (window.tasksVision && (window.tasksVision.HandLandmarker || (window.tasksVision.default && window.tasksVision.default.HandLandmarker)));
 
         if (!Resolver || !FaceL || !HandL) {
             console.log('[MediaPipe] Dynamically importing Tasks Vision module...');
             const visionMod = await import("https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0");
             window.tasksVision = visionMod;
-            Resolver = visionMod.FilesetResolver;
-            FaceL = visionMod.FaceLandmarker;
-            HandL = visionMod.HandLandmarker;
+            Resolver = visionMod.FilesetResolver || (visionMod.default && visionMod.default.FilesetResolver);
+            FaceL = visionMod.FaceLandmarker || (visionMod.default && visionMod.default.FaceLandmarker);
+            HandL = visionMod.HandLandmarker || (visionMod.default && visionMod.default.HandLandmarker);
         }
 
         if (!Resolver || !FaceL || !HandL) {
@@ -897,6 +946,9 @@ async function initMediaPipe() {
         const vision = await Resolver.forVisionTasks(
             "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@0.10.0/wasm"
         );
+        visionFileset = vision;
+        visionFaceClass = FaceL;
+        visionHandClass = HandL;
         
         try {
             faceLandmarker = await FaceL.createFromOptions(vision, {
@@ -1566,15 +1618,49 @@ async function processVideoFrame(now) {
         document.getElementById('hud-mic-bar').style.width = `${Math.min(100, audioEnergy * 150)}%`;
     }
 
-    // B. 執行 MediaPipe 臉部與手部偵測
-    const timestampMs = performance.now();
+    // B. 執行 MediaPipe 臉部與手部偵測 (嚴格遞增整數時間戳 + 隱藏 Video 畫布雙重容錯 + GPU/CPU 自動降級)
+    const videoReady = webcamVideo.readyState >= 2 && webcamVideo.videoWidth > 0 && webcamVideo.videoHeight > 0;
     let faceResults = null;
     let handResults = null;
-    if (faceLandmarker) {
-        try { faceResults = faceLandmarker.detectForVideo(webcamVideo, timestampMs); } catch (e) {}
-    }
-    if (handLandmarker) {
-        try { handResults = handLandmarker.detectForVideo(webcamVideo, timestampMs); } catch (e) {}
+    if (videoReady) {
+        let timestampMs = Math.floor(performance.now());
+        if (timestampMs <= lastVisionTimestampMs) {
+            timestampMs = lastVisionTimestampMs + 1;
+        }
+        lastVisionTimestampMs = timestampMs;
+
+        if (faceLandmarker) {
+            try {
+                faceResults = faceLandmarker.detectForVideo(webcamVideo, timestampMs);
+                if ((!faceResults || !faceResults.faceLandmarks || faceResults.faceLandmarks.length === 0) && aiCanvas && aiCanvas.width > 0) {
+                    lastVisionTimestampMs += 1;
+                    faceResults = faceLandmarker.detectForVideo(aiCanvas, lastVisionTimestampMs);
+                }
+            } catch (e) {
+                try {
+                    lastVisionTimestampMs += 1;
+                    faceResults = faceLandmarker.detectForVideo(aiCanvas, lastVisionTimestampMs);
+                } catch (e2) {
+                    fallbackVisionToCpu(e2);
+                }
+            }
+        }
+        if (handLandmarker) {
+            try {
+                handResults = handLandmarker.detectForVideo(webcamVideo, lastVisionTimestampMs);
+                if ((!handResults || !handResults.landmarks || handResults.landmarks.length === 0) && aiCanvas && aiCanvas.width > 0) {
+                    lastVisionTimestampMs += 1;
+                    handResults = handLandmarker.detectForVideo(aiCanvas, lastVisionTimestampMs);
+                }
+            } catch (e) {
+                try {
+                    lastVisionTimestampMs += 1;
+                    handResults = handLandmarker.detectForVideo(aiCanvas, lastVisionTimestampMs);
+                } catch (e2) {
+                    fallbackVisionToCpu(e2);
+                }
+            }
+        }
     }
 
     let faceLandmarks = (faceResults && faceResults.faceLandmarks && faceResults.faceLandmarks.length > 0) ? faceResults.faceLandmarks[0] : null;
@@ -1960,7 +2046,7 @@ function triggerAlertLevel(level, msg, options = {}) {
         const eventType = options.eventType || level;
         const eventLogPromise = logAnomalyToSupabase(eventType, msg);
         if (level === 'L4' && eventType === 'L4') {
-            void queueL4EmailNotification(eventType, eventLogPromise);
+            updateL4WebNotificationEmailStatus(queueL4EmailNotification(eventType, eventLogPromise));
         }
     }
 }
@@ -1990,6 +2076,49 @@ function playSwallowChimeSound() {
     } catch (e) {}
 }
 
+function showL4WebNotificationToast(msg) {
+    const toast = document.getElementById('l4-web-notification-toast');
+    if (toast) {
+        const timeEl = document.getElementById('l4-web-notification-time');
+        const titleEl = document.getElementById('l4-web-notification-title');
+        const bodyEl = document.getElementById('l4-web-notification-body');
+        const statusEl = document.getElementById('l4-web-notification-status');
+        const nowStr = new Date().toTimeString().split(' ')[0];
+        const patientName = (typeof currentPatient !== 'undefined' && currentPatient && currentPatient.full_name) ? currentPatient.full_name : '當前個案';
+        if (timeEl) timeEl.textContent = nowStr;
+        if (titleEl) titleEl.textContent = `L4 進食安全提醒（${patientName}）`;
+        if (bodyEl) bodyEl.textContent = msg;
+        if (statusEl) statusEl.textContent = '🔔 網頁即時通知已跳出 ｜ 📧 正在同步觸發 Gmail 通知...';
+        toast.classList.remove('hidden');
+    }
+    try {
+        if (typeof Notification !== 'undefined') {
+            if (Notification.permission === 'granted') {
+                new Notification('🚨 L4 進食安全提醒（急性哽噎）', { body: msg });
+            } else if (Notification.permission === 'default' && typeof Notification.requestPermission === 'function') {
+                Notification.requestPermission().then(perm => {
+                    if (perm === 'granted') new Notification('🚨 L4 進食安全提醒（急性哽噎）', { body: msg });
+                }).catch(() => {});
+            }
+        }
+    } catch (e) {}
+}
+
+function updateL4WebNotificationEmailStatus(emailPromise) {
+    Promise.resolve(emailPromise).then(sent => {
+        const statusEl = document.getElementById('l4-web-notification-status');
+        if (!statusEl) return;
+        statusEl.textContent = sent
+            ? '✅ 網頁通知已跳出 ｜ 📧 Gmail 緊急信件已同步寄出'
+            : '✅ 網頁即時通知已跳出（測試時免收信即可直接確認 L4 通知）';
+    }).catch(() => {});
+}
+
+function dismissL4WebNotificationToast() {
+    const toast = document.getElementById('l4-web-notification-toast');
+    if (toast) toast.classList.add('hidden');
+}
+
 function showAlertOverlay(level, msg) {
     const overlay = document.getElementById('alert-overlay');
     const title = document.getElementById('alert-title');
@@ -1998,10 +2127,14 @@ function showAlertOverlay(level, msg) {
     title.innerText = level === 'L4' ? '🚨 L4 急性哽噎緊急警報' : (level === 'L2' ? '🔴 L2 嚴重卡喉發呆警報' : '⚠️ L3 需注意警示');
     desc.innerText = msg;
     overlay.classList.remove('hidden');
+    if (level === 'L4') {
+        showL4WebNotificationToast(msg);
+    }
 }
 
 function dismissAlertOverlay() {
     document.getElementById('alert-overlay').classList.add('hidden');
+    dismissL4WebNotificationToast();
     stopBuzzerSound();
     activeAlertLevel = null;
     activeAlertMessage = null;
@@ -2205,7 +2338,20 @@ async function startPeerConnection(clientId) {
     try {
         const negotiationId = activeNegotiationId;
         peerConnection = new RTCPeerConnection(CONFIG.RTC_CONFIG);
-        webcamStream.getTracks().forEach(track => peerConnection.addTrack(track, webcamStream));
+        let outboundStream = webcamStream;
+        try {
+            if (aiCanvas && typeof aiCanvas.captureStream === 'function' && typeof MediaStream === 'function') {
+                const canvasStream = aiCanvas.captureStream(24);
+                const videoTracks = canvasStream ? canvasStream.getVideoTracks() : [];
+                if (videoTracks.length > 0) {
+                    const audioTracks = webcamStream.getAudioTracks ? webcamStream.getAudioTracks() : [];
+                    outboundStream = new MediaStream([...videoTracks, ...audioTracks]);
+                }
+            }
+        } catch (streamErr) {
+            outboundStream = webcamStream;
+        }
+        outboundStream.getTracks().forEach(track => peerConnection.addTrack(track, outboundStream));
 
         peerConnection.onicecandidate = async (event) => {
             if (event.candidate && supabaseChannel && patientRealtimeReady) {
@@ -2596,6 +2742,16 @@ function updateHudStats(stateStr, marVal, jawStdVal, chewCnt, swallowCnt, jawVel
     }
 }
 
+function drawUnmirroredText(ctx, text, x, y, canvasWidth) {
+    ctx.save();
+    ctx.translate(canvasWidth, 0);
+    ctx.scale(-1, 1);
+    const textWidth = (typeof ctx.measureText === 'function') ? (ctx.measureText(text).width || 0) : 0;
+    const drawX = Math.max(8, Math.min(canvasWidth - textWidth - 8, canvasWidth - x - textWidth));
+    ctx.fillText(text, drawX, y);
+    ctx.restore();
+}
+
 function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, stateStr, marVal, jawStdVal, chewCnt, isHandOnNeck = false, isHandOnChest = false, isBodyShaking = false, simultaneousSec = 0.0) {
     if (landmarks) {
         // 🎯 1. 繪製 MediaPipe 臉部 3D 全骨架與特徵網格 (藍色面輪廓、眼睛、眉毛、雙唇)
@@ -2663,7 +2819,7 @@ function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, state
 
         ctx.fillStyle = isHandOnNeck ? '#f43f5e' : '#d946ef';
         ctx.font = 'bold 11px sans-serif';
-        ctx.fillText('Throat Zone (喉嚨)', throatX - 40, throatY - throatR - 5);
+        drawUnmirroredText(ctx, 'Throat Zone (喉嚨)', throatX - 40, throatY - throatR - 5, w);
 
         const chestX = zoneGeom.chestCenter.x;
         const chestY = zoneGeom.chestCenter.y;
@@ -2677,7 +2833,7 @@ function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, state
 
         ctx.fillStyle = isHandOnChest ? '#f43f5e' : '#38bdf8';
         ctx.font = 'bold 11px sans-serif';
-        ctx.fillText('Chest Zone (胸口)', chestX - 42, chestY - chestR - 5);
+        drawUnmirroredText(ctx, 'Chest Zone (胸口)', chestX - 42, chestY - chestR - 5, w);
 
         // 5. 繪製手部 21 關節骨架 (若摸喉或拍胸均高亮為玫瑰紅)
         if (handLandmarks && handLandmarks.length > 0) {
@@ -2688,7 +2844,7 @@ function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, state
         if (stateStr === 'SWALLOW') {
             ctx.fillStyle = '#ef4444';
             ctx.font = 'bold 28px sans-serif';
-            ctx.fillText('SWALLOWING...', 20, h - 30);
+            drawUnmirroredText(ctx, 'SWALLOWING...', 20, h - 30, w);
         }
 
         // 🎯 7. L4 急性哽噎風險累積進度條 (3.0s 門檻 + 漸進衰減)
@@ -2716,10 +2872,12 @@ function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, state
             // 倒數文字
             ctx.fillStyle = '#fef08a';
             ctx.font = 'bold 13px sans-serif';
-            ctx.fillText(
+            drawUnmirroredText(
+                ctx,
                 `⚠️ 急性哽噎風險累積: ${simultaneousSec.toFixed(1)}s / ${CHOKE_SIMULTANEOUS_TRIGGER_SEC.toFixed(1)}s`,
                 barX + 16,
-                barY + 20
+                barY + 20,
+                w
             );
 
             // 填滿進度條
@@ -2733,7 +2891,7 @@ function drawOriginalDetectionOverlay(ctx, landmarks, handLandmarks, w, h, state
         // 人臉遺失大字提示 (NO FACE DETECTED)
         ctx.fillStyle = '#ef4444';
         ctx.font = 'bold 24px sans-serif';
-        ctx.fillText('NO FACE DETECTED', w * 0.25, h * 0.5);
+        drawUnmirroredText(ctx, 'NO FACE DETECTED', w * 0.25, h * 0.5, w);
 
         if (handLandmarks && handLandmarks.length > 0) {
             drawHandSkeleton(ctx, handLandmarks, w, h, isHandOnNeck);

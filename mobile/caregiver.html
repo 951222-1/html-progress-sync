@@ -240,11 +240,35 @@
         </div>
     </section>
 
+    <!-- 🔔 L4 網頁即時推播通知彈窗 (右上角浮動卡片，測試時免收信即可直接看到通知內容) -->
+    <div id="l4-web-notification-toast" role="alert" aria-live="assertive" class="fixed top-4 right-4 z-[60] max-w-sm w-[calc(100%-2rem)] bg-rose-950/95 backdrop-blur-md border-2 border-rose-400 text-white rounded-2xl shadow-2xl p-4 hidden">
+        <div class="flex items-start justify-between gap-3">
+            <div class="flex items-center gap-2">
+                <span class="text-2xl animate-bounce">🚨</span>
+                <div>
+                    <div class="flex items-center gap-2">
+                        <span class="bg-rose-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">L4 緊急通知</span>
+                        <span id="l4-web-notification-time" class="text-[11px] font-mono text-rose-200">--:--:--</span>
+                    </div>
+                    <h4 id="l4-web-notification-title" class="font-black text-sm text-white mt-0.5">L4 進食安全提醒（急性哽噎）</h4>
+                </div>
+            </div>
+            <button type="button" onclick="dismissL4WebNotificationToast()" class="text-rose-200 hover:text-white font-bold text-sm px-1.5 py-0.5 rounded-lg hover:bg-rose-800/60 transition" aria-label="關閉通知">✕</button>
+        </div>
+        <p id="l4-web-notification-body" class="text-xs text-rose-100 leading-relaxed mt-2.5 bg-rose-900/60 p-2.5 rounded-xl border border-rose-700/60">
+            系統偵測到 L4 急性哽噎緊急事件，請立即查看個案狀況！
+        </p>
+        <div class="mt-2.5 flex items-center justify-between text-[11px] text-rose-200">
+            <span id="l4-web-notification-status">🔔 網頁即時通知已跳出（同步觸發 Gmail 通知）</span>
+            <button type="button" onclick="dismissL4WebNotificationToast()" class="bg-white text-rose-900 font-bold px-3 py-1 rounded-lg text-xs shadow hover:bg-rose-50 transition">知道了</button>
+        </div>
+    </div>
+
     <!-- 腳本引用 -->
-    <script src="config.js?v=20261110_d0b3a1b"></script>
-    <script src="connection-core.js?v=20261110_d0b3a1b"></script>
-    <script src="auth-ui.js?v=20261110_d0b3a1b"></script>
-    <script src="caregiver.js?v=20261110_d0b3a1b"></script>
+    <script src="config.js?v=20261115_l4hud"></script>
+    <script src="connection-core.js?v=20261115_l4hud"></script>
+    <script src="auth-ui.js?v=20261115_l4hud"></script>
+    <script src="caregiver.js?v=20261115_l4hud"></script>
     <script src="../local_recording/meal-recording.js?v=localrec-1"></script>
     <script src="../local_recording/local-recording-ui.js?v=localrec-1"></script>
     <script src="../local_recording/local-recording-panel.js?v=localrec-1"></script>

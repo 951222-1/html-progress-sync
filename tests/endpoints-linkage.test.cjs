@@ -1139,3 +1139,27 @@ test('authenticated flow enters standby for single home patient, isolates cough 
   assert.equal(context.api.getState().isKioskLocked, false);
   assert.equal(getEl('login-modal').classList.contains('hidden'), false, 'valid caregiver password unlocks patient selector');
 });
+
+test('L4 acute choking alert pops up the top-right web notification toast on both patient and caregiver endpoints', () => {
+  for (const page of [patientPage, caregiverPage]) {
+    assert.match(page, /id="l4-web-notification-toast"/);
+    assert.match(page, /id="l4-web-notification-title"/);
+    assert.match(page, /id="l4-web-notification-body"/);
+    assert.match(page, /id="l4-web-notification-status"/);
+  }
+  assert.match(patientJs, /function showL4WebNotificationToast\(/);
+  assert.match(patientJs, /if \(level === 'L4'\) \{\s*showL4WebNotificationToast\(msg\);\s*\}/);
+  assert.match(caregiverJs, /function showL4WebNotificationToast\(/);
+  assert.match(caregiverJs, /if \(level === 'L4'\) \{\s*showL4WebNotificationToast\(resolvedMsg\);\s*\}/);
+});
+
+test('detection HUD overlay is visible by default and MediaPipe landmark detection has canvas and CPU fallbacks', () => {
+  assert.match(patientPage, /id="hud-stats-overlay" class="[^"]*z-20"/);
+  assert.doesNotMatch(patientPage, /id="hud-stats-overlay" class="[^"]*hidden/);
+  assert.match(patientPage, /id="btn-toggle-hud-stats"/);
+  assert.match(patientJs, /lastVisionTimestampMs/);
+  assert.match(patientJs, /fallbackVisionToCpu/);
+  assert.match(patientJs, /faceLandmarker\.detectForVideo\(aiCanvas,\s*lastVisionTimestampMs\)/);
+  assert.match(patientJs, /aiCanvas\.captureStream\(24\)/);
+});
+
