@@ -607,8 +607,9 @@ class LocalHTTPTests(unittest.TestCase):
         self.assertEqual(response.status, 200)
         self.assertIn('../local_recording/meal-recording.js?v=localrec-1', html)
         self.assertIn('../local_recording/bridge.js?v=localrec-1', html)
-        self.assertIn('id="local-recording-connect"', html)
-        self.assertEqual(html.count('id="local-recording-status"'), 1)
+        self.assertNotIn('id="local-recording-connect"', html)
+        self.assertNotIn('id="local-recording-status"', html)
+        self.assertEqual(html.count('id="local-recording-live"'), 1)
         self.assertEqual(self.index_path.read_bytes(), self.index_before)
         self.assertEqual(html.encode('utf-8'), self.index_before)
         with urlopen(self.base + '/mobile/caregiver.html', timeout=5) as response:

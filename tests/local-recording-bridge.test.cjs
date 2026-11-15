@@ -8,13 +8,13 @@ function response(data,status=200){return {ok:status>=200&&status<300,status,jso
 function deferred(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return {promise,resolve,reject};}
 const config={mode:'local-recording',csrf_token:'synthetic-csrf-token',ffmpeg_available:true};
 
-function startMealHarness({serviceAvailable=true,consentEnabled=true,consentReadFails=false,consentWriteFails=false,consentReadQueue=[],consentReadGate=null,startBarrier=null,includePatientForm=false,remoteMode=false,onConsentReadStart=null,onRecordingBegin=null}={}){
+function startMealHarness({serviceAvailable=true,consentEnabled=true,consentReadFails=false,consentWriteFails=false,consentReadQueue=[],consentReadGate=null,startBarrier=null,includePatientForm=false,remoteMode=false,omitPatientRecordingUi=false,onConsentReadStart=null,onRecordingBegin=null}={}){
  const calls=[],serviceState={value:serviceAvailable},consentSetting={value:consentEnabled},queuedConsentReads=[...consentReadQueue];let mealActive=false,consentReadCount=0;
  const makeElement=id=>({id,hidden:false,checked:false,type:'',textContent:'',dataset:{},listeners:{},children:[],parentElement:null,append(...items){for(const item of items){item.parentElement=this;this.children.push(item);}},insertBefore(item,reference){item.parentElement=this;const index=this.children.indexOf(reference);this.children.splice(index<0?this.children.length:index,0,item);},addEventListener(type,fn){(this.listeners[type]||(this.listeners[type]=[])).push(fn);},removeEventListener(type,fn){this.listeners[type]=(this.listeners[type]||[]).filter(value=>value!==fn);},click(){for(const fn of [...(this.listeners.click||[])])fn({target:this,preventDefault(){}});}});
- const elements={
+ const elements={...(omitPatientRecordingUi?{}:{
   'local-recording-connect':makeElement('local-recording-connect'),
   'local-recording-connect-panel':{hidden:false},'local-recording-privacy':{hidden:false,role:'region',ariaLabel:'錄影隱私說明'},'local-recording-status':{hidden:true,textContent:'',dataset:{}}
- };
+ })};
  if(includePatientForm){const form=makeElement('patient-add-view'),actions=makeElement('patient-add-actions'),save=makeElement('btn-save-new-patient');actions.append(save);form.append(actions);elements['patient-add-view']=form;elements['btn-save-new-patient']=save;}
  function findElement(node,id){if(!node)return null;if(node.id===id)return node;for(const child of node.children||[]){const found=findElement(child,id);if(found)return found;}return null;}
  const recorder={begin:(profile,session)=>{calls.push(['recording-begin',profile,session]);onRecordingBegin?.({profile,session,mealActive});},selectPatient(){},end:async()=>null,getState:()=>({active:false})};
@@ -131,12 +131,11 @@ test('meal starts without a dialog and automatically records when consent is sav
  assert.equal(calls[recordingStart][1].recording_enabled,true);
 });
 
-test('privacy disclosure remains visible after the connection panel hides',async()=>{
- const {elements}=startMealHarness({serviceAvailable:true});
- await new Promise(resolve=>setImmediate(resolve));await new Promise(resolve=>setImmediate(resolve));
- assert.equal(elements['local-recording-connect-panel'].hidden,true);
- assert.equal(elements['local-recording-privacy'].hidden,false);
- assert.equal(elements['local-recording-privacy'].ariaLabel,'錄影隱私說明');
+test('patient meal monitoring works when the patient-side recording panel and status elements are absent',async()=>{
+ const {root,calls}=startMealHarness({serviceAvailable:false,remoteMode:true,omitPatientRecordingUi:true});
+ await root.startMealSession();
+ assert.ok(calls.some(call=>call[0]==='original-start'));
+ assert.equal(calls.some(call=>call[0]==='recording-begin'),false);
 });
 
 test('meal startup does not wait for a pending post-start consent refresh',async()=>{
