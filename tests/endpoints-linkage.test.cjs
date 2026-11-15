@@ -76,6 +76,7 @@ test('patient page has inline connection controls and no full-screen recording c
   assert.match(privacyText,/只保存在這台電腦/);
   assert.match(privacyText,/不會上傳到 Supabase/);
   assert.match(privacyText,/照護端.*啟用.*本機服務連線時.*自動/);
+  assert.match(patientPage,/id="btn-save-new-patient"[^>]*onclick="saveAndLoginNewPatient\(\)"/);
   assert.doesNotMatch(patientPage, /meal-recording-confirm-dialog|meal-recording-choice-(?:record|no-record|cancel)|meal-recording-confirm-status/);
   assert.doesNotMatch(patientPage.slice(0, mainStart), /local-recording-connect-panel|local-recording-connect-status/);
 });

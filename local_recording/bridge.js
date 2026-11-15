@@ -127,6 +127,17 @@
   try{if(typeof root?.getCurrentMealSessionInsertPromise==='function')return root.getCurrentMealSessionInsertPromise();}catch(_){}
   try{return typeof currentMealSessionInsertPromise!=='undefined'?currentMealSessionInsertPromise:Promise.resolve(null);}catch(_){return Promise.resolve(null);}
  }
+ function addPatientConsentControl(root){
+  const doc=root.document,save=doc?.getElementById('btn-save-new-patient');
+  if(!save||doc.getElementById('new-patient-local-recording'))return;
+  const label=doc.createElement('label');label.id='new-patient-local-recording-label';label.className='ui-patient-recording-optin';
+  const input=doc.createElement('input');input.type='checkbox';input.id='new-patient-local-recording';input.checked=false;input.className='ui-patient-recording-optin-checkbox';
+  const copy=doc.createElement('span');copy.className='ui-patient-recording-optin-copy';
+  const title=doc.createElement('strong');title.className='ui-patient-recording-optin-title';title.textContent='需要整餐錄影（只有影像，不收錄音）';
+  const details=doc.createElement('span');details.className='ui-patient-recording-optin-details';details.textContent='勾選代表已向本人或有權代理人說明並取得同意。只錄無聲影像、保存在本機，不會上傳到 Supabase；本機服務連線後才會保存設定，照護端可關閉。';
+  copy.append(title,details);label.append(input,copy);
+  save.parentElement?.parentElement?.insertBefore(label,save.parentElement);
+ }
 
  function wrap(root,name,makeWrapper){
   const original=root[name];if(typeof original!=='function'||original.__localRecordingWrapped)return;
@@ -139,17 +150,20 @@
   const connectPanel=root.document?.getElementById('local-recording-connect-panel');
   const connectStatus=root.document?.getElementById('local-recording-connect-status');
   attachLogoutRevocation(root,api);
+  addPatientConsentControl(root);
   let selectedId=null,consent=false,consentKnown=false,consentGeneration=0,creatingPatient=false,startLocked=false,channel=null;
+  const offlineOptInBlock=new Set();
   function say(text,state='selected'){
    const status=root.document?.getElementById('local-recording-status');
    if(!status)return;
    status.hidden=!text;status.textContent=text;status.dataset.state=state;
   }
-  function canRecordThisMeal(profile){return !!(profile?.id&&api.isConnected&&consentKnown&&consent&&selectedId===profile.id&&getPatient(root)?.id===profile.id);}
+  function canRecordThisMeal(profile){return !!(profile?.id&&api.isConnected&&!offlineOptInBlock.has(profile.id)&&consentKnown&&consent&&selectedId===profile.id&&getPatient(root)?.id===profile.id);}
   function noRecordingReason(profile){
    if(!profile?.id)return '未選擇個案；本餐不會錄影。';
    if(getPatient(root)?.id!==profile.id)return '個案已切換；本餐不會錄影。用餐監測已開始。';
    if(!api.isConnected)return '本機錄影服務未連線；本餐不會錄影。用餐監測已開始。';
+   if(offlineOptInBlock.has(profile.id))return '新增個案時的錄影設定尚未保存；照護端重新確認前不會錄影。';
    if(selectedId!==profile.id||!consentKnown)return '無法確認此個案的錄影設定；本餐不會錄影。用餐監測已開始。';
    return '照護端尚未為此個案啟用本機錄影；本餐不會錄影。用餐監測已開始。';
   }
@@ -179,13 +193,14 @@
   }else void connectLocalService();
   async function loadConsent(profile){
    if(!profile?.id){selectedId=null;consent=false;consentKnown=false;ui.selectPatient(null);say('');return false;}
+   if(offlineOptInBlock.has(profile.id)){selectedId=profile.id;consent=false;consentKnown=false;ui.selectPatient({...profile,recording_enabled:false});say('新增個案時的錄影設定尚未保存；照護端重新確認前不會錄影。','error');return false;}
    selectedId=profile.id;consent=false;consentKnown=false;const generation=++consentGeneration;
    ui.selectPatient({...profile,recording_enabled:false});
    if(!api.isConnected){say('本機錄影服務未連線；用餐監測仍可使用，但不會錄影。','selected');return false;}
    try{
     const result=await api.request('/api/local/consent?patient_id='+encodeURIComponent(profile.id));
     if(generation!==consentGeneration||selectedId!==profile.id)return false;
-    if(!result||typeof result.recording_enabled!=='boolean')throw new Error('本機錄影設定格式錯誤。');
+    if(!result||result.patient_id!==profile.id||typeof result.recording_enabled!=='boolean')throw new Error('本機錄影設定格式錯誤。');
     consent=result.recording_enabled===true;
     consentKnown=true;
     ui.selectPatient({...profile,recording_enabled:consent});
@@ -200,6 +215,7 @@
    channel.onmessage=event=>{
     if(event.data?.patientId!==selectedId)return;
     const profile=getPatient(root);
+    offlineOptInBlock.delete(event.data.patientId);
     if(event.data.enabled!==true){consentGeneration++;consent=false;consentKnown=false;void recorder.end();if(profile)ui.selectPatient({...profile,recording_enabled:false});say('照護端已關閉本機錄影；目前影片會保留在這台電腦。','idle');return;}
     if(profile){say('照護端已更新錄影設定；正在重新確認本機狀態。','selected');void loadConsent(profile);}
    };
@@ -212,11 +228,18 @@
   });
   wrap(root,'saveAndLoginNewPatient',original=>async function(...args){
    const before=getPatient(root)?.id||null;
+   const requested=root.document?.getElementById('new-patient-local-recording')?.checked===true;
    creatingPatient=true;
    try{await original.apply(this,args);}finally{creatingPatient=false;}
    const profile=getPatient(root);
    if(profile?.id&&profile.id!==before){
-    installConsentChannel(profile.id);await loadConsent(profile);
+    installConsentChannel(profile.id);
+    if(!api.isConnected){offlineOptInBlock.add(profile.id);selectedId=profile.id;consent=false;consentKnown=false;ui.selectPatient({...profile,recording_enabled:false});say(requested?'個案已建立；錄影啟用尚未保存。請連接本機服務，並由照護端面板啟用。':'個案已建立；錄影保持關閉。連接本機服務後，如需錄影，請由照護端面板啟用。','error');return;}
+    try{await api.request('/api/local/consent',{method:'PUT',json:{patient_id:profile.id,enabled:requested}});}
+    catch(error){offlineOptInBlock.add(profile.id);if(getPatient(root)?.id!==profile.id)return;selectedId=profile.id;consent=false;consentKnown=false;ui.selectPatient({...profile,recording_enabled:false});say('個案已建立；錄影設定未保存，錄影保持關閉。請確認本機服務與登入狀態。','error');return;}
+    offlineOptInBlock.delete(profile.id);
+    if(getPatient(root)?.id!==profile.id)return;
+    await loadConsent(profile);
    }
   });
   wrap(root,'startMealSession',original=>async function(...args){
