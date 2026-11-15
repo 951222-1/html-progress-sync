@@ -855,14 +855,6 @@ window.isMealSessionActive = () => Boolean(isMealActive);
 window.isPatientKioskLocked = () => Boolean(isKioskLocked);
 window.startMealSession = startMealSession;
 window.endMealSession = endMealSession;
-function toggleHudStatsDetails() {
-    const details = document.getElementById('hud-stats-details');
-    const btn = document.getElementById('btn-toggle-hud-stats');
-    if (!details) return;
-    const isHidden = details.classList.toggle('hidden');
-    if (btn) btn.textContent = isHidden ? '展開' : '收合';
-}
-
 let visionFileset = null;
 let visionFaceClass = null;
 let visionHandClass = null;
@@ -872,7 +864,7 @@ let lastVisionTimestampMs = 0;
 window.dismissAlertOverlay = dismissAlertOverlay;
 window.showL4WebNotificationToast = showL4WebNotificationToast;
 window.dismissL4WebNotificationToast = dismissL4WebNotificationToast;
-window.toggleHudStatsDetails = toggleHudStatsDetails;
+
 
 // 🎯 事件委派 (雲端個案按鈕點擊進入待機)
 document.addEventListener('click', (evt) => {
