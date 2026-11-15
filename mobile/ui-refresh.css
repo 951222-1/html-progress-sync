@@ -262,6 +262,20 @@ html[data-ui-theme="milktea"] footer {
   font-size: .85rem;
   line-height: 1.45;
 }
+html[data-ui-theme="milktea"] .ui-cough-record-card {
+  color: var(--milk-ink);
+  background-color: var(--milk-surface-soft);
+  border: 1px solid var(--milk-border);
+  box-shadow: 0 3px 10px rgba(72, 50, 31, .05);
+}
+html[data-ui-theme="milktea"] .ui-cough-record-card .text-rose-400 { color: #a33b45 !important; }
+html[data-ui-theme="milktea"] .ui-cough-record-card .text-amber-400 { color: #865e10 !important; }
+html[data-ui-theme="milktea"] .ui-cough-record-saved {
+  color: #31583a !important;
+  background-color: #e3eedf !important;
+  border: 1px solid #bdcfb7 !important;
+}
+
 .ui-recording-live {
   width: fit-content;
   margin: .25rem auto;
