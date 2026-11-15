@@ -8,6 +8,8 @@ const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 const patient = read('mobile/index.html');
 const caregiver = read('mobile/caregiver.html');
 const patientStyle = read('mobile/style.css');
+const patientJs = read('mobile/app.js');
+const uiCss = read('mobile/ui-refresh.css');
 
 test('patient UI adds warm idle clock and accessible font controls without replacing meal/alert anchors', () => {
   for (const id of ['ui-refresh-controls', 'ui-font-decrease', 'ui-font-percent', 'ui-font-increase', 'idle-greeting', 'idle-date', 'idle-weekday', 'idle-time']) {
@@ -25,6 +27,20 @@ test('patient camera preview is not mirrored, matching the caregiver WebRTC orie
   assert.equal(canvasRule ? /transform\s*:\s*scaleX\(\s*-1\s*\)/.test(canvasRule[1]) : false, false,
     'patient canvas must not be horizontally mirrored');
   assert.match(patient, /href="style\.css\?v=[^"]+"/);
+});
+
+test('cough event cards and saved badges use high-contrast milk-tea colors', () => {
+  const rowClass = patientJs.match(/row\.className\s*=\s*'([^']+)'/)?.[1] || '';
+  const badgeClass = patientJs.match(/savedBadge\.className\s*=\s*'([^']+)'/)?.[1] || '';
+  assert.match(rowClass, /\bui-cough-record-card\b/);
+  assert.match(badgeClass, /\bui-cough-record-saved\b/);
+  assert.match(uiCss, /html\[data-ui-theme="milktea"\]\s+\.ui-cough-record-card\s*\{[^}]*background-color:\s*var\(--milk-surface-soft\)/s);
+  assert.match(uiCss, /html\[data-ui-theme="milktea"\]\s+\.ui-cough-record-card\s*\{[^}]*color:\s*var\(--milk-ink\)/s);
+  const savedStyle = uiCss.match(/html\[data-ui-theme="milktea"\]\s+\.ui-cough-record-saved\s*\{([^}]+)\}/s)?.[1] || '';
+  assert.match(savedStyle, /background-color:\s*#[0-9a-f]{6}/i);
+  assert.match(savedStyle, /color:\s*#[0-9a-f]{6}/i);
+  assert.match(patient, /href="ui-refresh\.css\?v=\d{8}_[a-f0-9]{7}"/);
+  assert.match(caregiver, /href="ui-refresh\.css\?v=\d{8}_[a-f0-9]{7}"/);
 });
 
 test('caregiver UI gets monitor header controls while preserving alert, audio, chart and history anchors', () => {

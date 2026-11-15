@@ -775,7 +775,7 @@ function renderCoughRecords() {
 
     for (const item of logs) {
         const row = document.createElement('div');
-        row.className = 'bg-slate-800/70 border border-slate-700/60 p-2.5 rounded-2xl flex items-center justify-between text-xs';
+        row.className = 'ui-cough-record-card p-2.5 rounded-2xl flex items-center justify-between text-xs';
 
         const left = document.createElement('div');
         const headerRow = document.createElement('div');
@@ -798,7 +798,7 @@ function renderCoughRecords() {
         left.append(headerRow, detailDiv);
 
         const savedBadge = document.createElement('span');
-        savedBadge.className = 'text-[10px] bg-emerald-950/60 text-emerald-400 px-2 py-0.5 rounded-lg border border-emerald-800/40 shrink-0';
+        savedBadge.className = 'ui-cough-record-saved text-[10px] px-2 py-0.5 rounded-lg shrink-0';
         savedBadge.textContent = '已隔離存檔';
 
         row.append(left, savedBadge);
