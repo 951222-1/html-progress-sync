@@ -7,6 +7,7 @@ const root = path.resolve(__dirname, '..');
 const read = relative => fs.readFileSync(path.join(root, relative), 'utf8');
 const patient = read('mobile/index.html');
 const caregiver = read('mobile/caregiver.html');
+const patientStyle = read('mobile/style.css');
 
 test('patient UI adds warm idle clock and accessible font controls without replacing meal/alert anchors', () => {
   for (const id of ['ui-refresh-controls', 'ui-font-decrease', 'ui-font-percent', 'ui-font-increase', 'idle-greeting', 'idle-date', 'idle-weekday', 'idle-time']) {
@@ -17,6 +18,13 @@ test('patient UI adds warm idle clock and accessible font controls without repla
   }
   assert.match(patient, /ui-refresh\.css/);
   assert.match(patient, /ui-refresh\.js/);
+});
+
+test('patient camera preview is not mirrored, matching the caregiver WebRTC orientation', () => {
+  const canvasRule = patientStyle.match(/#ai-canvas\s*\{([^}]+)\}/);
+  assert.equal(canvasRule ? /transform\s*:\s*scaleX\(\s*-1\s*\)/.test(canvasRule[1]) : false, false,
+    'patient canvas must not be horizontally mirrored');
+  assert.match(patient, /href="style\.css\?v=[^"]+"/);
 });
 
 test('caregiver UI gets monitor header controls while preserving alert, audio, chart and history anchors', () => {

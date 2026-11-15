@@ -41,11 +41,6 @@ body {
     box-shadow: 0 4px 12px rgba(37, 99, 235, 0.4);
 }
 
-/* Canvas 相機畫面上方層級控制 */
-#ai-canvas {
-    transform: scaleX(-1); /* 水平翻轉以符合鏡頭自拍習慣 */
-}
-
 /* 警報跳窗閃爍動畫 */
 @keyframes alertPulse {
     0%, 100% {
