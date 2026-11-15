@@ -75,23 +75,12 @@
 
     <!-- 主要相機與 AI 監測內容區 -->
     <main class="flex-1 max-w-md w-full mx-auto p-4 flex flex-col justify-center space-y-4">
-        <dialog id="meal-recording-confirm-dialog" class="ui-meal-recording-dialog" aria-labelledby="meal-recording-confirm-title" aria-describedby="meal-recording-confirm-description">
-            <div class="ui-meal-recording-dialog-card">
-                <p class="ui-meal-recording-eyebrow">開始用餐前確認</p>
-                <h2 id="meal-recording-confirm-title">本機整餐無聲錄影</h2>
-                <p id="meal-recording-confirm-description">只有本機服務已連線、且照護端已同意時，才會錄影。影片不含聲音，只儲存在這台電腦，不會上傳到 Supabase。此處選「不錄影」不會更改照護端已存的同意設定。</p>
-                <section id="local-recording-connect-panel" class="ui-recording-connect-panel" aria-label="本機錄影連線">
-                    <p id="local-recording-connect-status" class="ui-recording-note">如要錄影，請先連接本機服務並允許瀏覽器本機網路存取。</p>
-                    <button id="local-recording-connect" type="button" class="ui-recording-connect-button">連接本機服務</button>
-                </section>
-                <p id="meal-recording-confirm-status" class="ui-meal-recording-confirm-status" role="status" aria-live="polite"></p>
-                <div class="ui-meal-recording-actions">
-                    <button id="meal-recording-choice-record" type="button" class="ui-meal-recording-record-button" hidden>同意本餐錄影並開始用餐</button>
-                    <button id="meal-recording-choice-no-record" type="button" class="ui-meal-recording-no-record-button">不錄影，照常開始用餐</button>
-                    <button id="meal-recording-choice-cancel" type="button" class="ui-meal-recording-cancel-button">返回</button>
-                </div>
-            </div>
-        </dialog>
+        <section id="local-recording-connect-panel" class="ui-recording-inline-connect" aria-label="本機錄影連線">
+            <p id="local-recording-connect-status" class="ui-recording-note">照護端已為個案啟用錄影且本機服務連線時，開始用餐會自動錄影。</p>
+            <button id="local-recording-connect" type="button" class="ui-recording-connect-button">連接本機服務</button>
+        </section>
+        <section id="local-recording-privacy" aria-label="錄影隱私說明" class="ui-recording-privacy">本機錄影僅在照護端已為此個案啟用、且本機服務連線時自動開始；錄製無聲影片，只保存在這台電腦，不會上傳到 Supabase。</section>
+        <p id="local-recording-live" hidden role="status" aria-live="polite" class="ui-recording-live">● 本機錄影中（無聲）</p>
         <p id="local-recording-status" hidden role="status" aria-live="polite" class="ui-recording-status"></p>
 
         <!-- AI 相機 Viewport 與 Canvas 繪圖面板 -->

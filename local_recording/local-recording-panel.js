@@ -32,7 +32,7 @@ function mount(env={}){
   if(!profile?.id){list.replaceChildren();empty.hidden=false;empty.textContent='請先選取個案。';return;}
   try{
    const rows=await api.request('/api/local/recordings?patient_id='+encodeURIComponent(profile.id));if(token!==generation||destroyed)return;
-   list.replaceChildren();empty.hidden=rows.length>0;empty.textContent=profile.recording_enabled?'此個案尚無影片；開始並結束用餐後，會在本機轉存並顯示。':'此個案未啟用錄影。新增個案時可勾選「需要錄影」；既有影片不會自動刪除。';
+   list.replaceChildren();empty.hidden=rows.length>0;empty.textContent=profile.recording_enabled?'此個案尚無影片；開始並結束用餐後，會在本機轉存並顯示。':'照護端尚未為此個案啟用錄影；既有影片不會自動刪除。';
    for(const row of rows){
     const card=el('article','','border border-slate-700 bg-slate-950 rounded-2xl p-4 space-y-2');card.dataset.recordingId=row.id;
     card.append(el('h4',dateLabel(row.started_at),'font-bold text-sm'));
