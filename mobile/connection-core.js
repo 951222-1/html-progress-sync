@@ -182,6 +182,14 @@
                 reason: '身體掙扎晃動＋手部拍胸／抓喉'
             };
         }
+        if (Boolean(bodyShaking) && Boolean(recentCough)) {
+            return {
+                active: true,
+                rate: 1.2,
+                path: 'cough_struggle',
+                reason: '劇烈嗆咳＋身體掙扎晃動'
+            };
+        }
         return { active: false, rate: 0.0, path: null, reason: null };
     }
 

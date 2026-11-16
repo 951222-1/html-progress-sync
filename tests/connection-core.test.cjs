@@ -330,6 +330,12 @@ test('multi-path L4 evaluator distinguishes struggle (3.0s), two-hand sign (2.5s
   const res = acc.update(pathC, 7.5);
   assert.equal(res.triggered, true);
   assert.equal(res.path, 'post_cough_clutch');
+
+  // Path D: violent cough + body struggle even when hands are outside camera frame -> 1.2x
+  const pathD = ConnectionCore.evaluateL4Candidate({ bodyShaking: true, handInZone: false, handsInZone: 0, recentCough: true });
+  assert.equal(pathD.active, true);
+  assert.equal(pathD.rate, 1.2);
+  assert.equal(pathD.path, 'cough_struggle');
 });
 
 

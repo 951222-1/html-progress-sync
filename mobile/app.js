@@ -100,7 +100,7 @@ let jawSmooth = null;
 let lastCoughTime = -Infinity;
 let handOnNeckStartTime = null;
 let handOnNeckDuration = 0.0;
-let lastChokeAlertTime = 0.0;
+let lastChokeAlertTime = -Infinity;
 
 let prevNose = null;
 let noseSpeedHistory = []; // max len 30
@@ -860,6 +860,8 @@ let visionFaceClass = null;
 let visionHandClass = null;
 let visionCpuFallbackTriggered = false;
 let lastVisionTimestampMs = 0;
+let consecutiveZeroFaceFrames = 0;
+let lastBodyShakeTrueAt = -Infinity;
 
 window.dismissAlertOverlay = dismissAlertOverlay;
 window.showL4WebNotificationToast = showL4WebNotificationToast;
@@ -889,7 +891,10 @@ async function fallbackVisionToCpu(reasonErr) {
                 delegate: "CPU"
             },
             runningMode: "VIDEO",
-            numFaces: 1
+            numFaces: 1,
+            minFaceDetectionConfidence: 0.35,
+            minFacePresenceConfidence: 0.35,
+            minTrackingConfidence: 0.35
         });
         handLandmarker = await visionHandClass.createFromOptions(visionFileset, {
             baseOptions: {
@@ -897,7 +902,10 @@ async function fallbackVisionToCpu(reasonErr) {
                 delegate: "CPU"
             },
             runningMode: "VIDEO",
-            numHands: 2
+            numHands: 2,
+            minHandDetectionConfidence: 0.35,
+            minHandPresenceConfidence: 0.35,
+            minTrackingConfidence: 0.35
         });
         lastVisionTimestampMs = 0;
         const aiStatus = document.getElementById('hud-ai-status');
@@ -949,7 +957,10 @@ async function initMediaPipe() {
                     delegate: "GPU"
                 },
                 runningMode: "VIDEO",
-                numFaces: 1
+                numFaces: 1,
+                minFaceDetectionConfidence: 0.35,
+                minFacePresenceConfidence: 0.35,
+                minTrackingConfidence: 0.35
             });
         } catch (gpuErr) {
             console.warn('[MediaPipe] GPU delegate failed, falling back to CPU:', gpuErr);
@@ -959,7 +970,10 @@ async function initMediaPipe() {
                     delegate: "CPU"
                 },
                 runningMode: "VIDEO",
-                numFaces: 1
+                numFaces: 1,
+                minFaceDetectionConfidence: 0.35,
+                minFacePresenceConfidence: 0.35,
+                minTrackingConfidence: 0.35
             });
         }
 
@@ -970,7 +984,10 @@ async function initMediaPipe() {
                     delegate: "GPU"
                 },
                 runningMode: "VIDEO",
-                numHands: 2
+                numHands: 2,
+                minHandDetectionConfidence: 0.35,
+                minHandPresenceConfidence: 0.35,
+                minTrackingConfidence: 0.35
             });
         } catch (gpuErr) {
             console.warn('[MediaPipe] GPU delegate failed for hands, falling back to CPU:', gpuErr);
@@ -980,7 +997,10 @@ async function initMediaPipe() {
                     delegate: "CPU"
                 },
                 runningMode: "VIDEO",
-                numHands: 2
+                numHands: 2,
+                minHandDetectionConfidence: 0.35,
+                minHandPresenceConfidence: 0.35,
+                minTrackingConfidence: 0.35
             });
         }
 
@@ -1111,9 +1131,12 @@ async function startMealSession() {
     jawSmooth = null;
     lastChewFlipTime = 0.0;
     chokeDangerAccumulator.reset();
+    lastChokeAlertTime = -Infinity;
     lastChokeVisibilityWarningAt = -Infinity;
     lastCoughTime = -Infinity;
     lastAiCoughTime = -Infinity;
+    lastBodyShakeTrueAt = -Infinity;
+    consecutiveZeroFaceFrames = 0;
     window._pendingAiCoughEvent = null;
     chokeSimultaneousStartTime = null;
     chokeSimultaneousDuration = 0.0;
@@ -1658,6 +1681,18 @@ async function processVideoFrame(now) {
     let faceLandmarks = (faceResults && faceResults.faceLandmarks && faceResults.faceLandmarks.length > 0) ? faceResults.faceLandmarks[0] : null;
     let handLandmarks = (handResults && handResults.landmarks && handResults.landmarks.length > 0) ? handResults.landmarks : [];
 
+    if (videoReady && faceLandmarker && !visionCpuFallbackTriggered) {
+        if (faceLandmarks) {
+            consecutiveZeroFaceFrames = 0;
+        } else {
+            consecutiveZeroFaceFrames += 1;
+            if (consecutiveZeroFaceFrames >= 20) {
+                consecutiveZeroFaceFrames = 0;
+                fallbackVisionToCpu('GPU delegate returned 20 consecutive zero-face frames; switching to CPU');
+            }
+        }
+    }
+
     let movementStd = 0.0;
     let mar = 0.0;
     let visionCough = false;
@@ -1721,6 +1756,9 @@ async function processVideoFrame(now) {
         // 🎯 先計算身體掙扎晃動；高敏感度設定固定以 1 個關節點判定手部手勢
         const faceSize = Math.hypot((nose.x - chin.x) * w, (nose.y - chin.y) * h);
         isBodyShakingContinuous = checkContinuousBodyShaking(nose, faceSize, currentTime, w, h);
+        if (isBodyShakingContinuous) {
+            lastBodyShakeTrueAt = currentTime;
+        }
         prevNose = { x: nose.x, y: nose.y };
 
         // 🎯 手抓喉嚨與上胸口拍胸手勢偵測 (與畫面疊圖幾何一致，高敏感度 minPts=1)
@@ -1732,14 +1770,18 @@ async function processVideoFrame(now) {
         isHandOnChestOrThroat = handCheck.near;
         handsInDangerZoneCount = handCheck.handsInZone;
 
-        // 影像嗆咳跡象 (高敏感度：std > 15.0、速度 > 8.0、連續 4 幀確認)
+        // 影像嗆咳跡象 (高敏感度：std > 15.0、速度 > 8.0、連續 4 幀確認；同時防範下巴折返過零點歸零與劇烈搖晃伴隨嗆咳)
         if (movementStd > 15.0 && Math.abs(mealMetrics.jawVelocity) > 8.0) {
             coughFrameCounter++;
+        } else if (movementStd > 10.0 && (Math.abs(mealMetrics.jawVelocity) > 5.0 || mar > 0.20)) {
+            coughFrameCounter++;
         } else {
-            coughFrameCounter = 0;
+            coughFrameCounter = Math.max(0, coughFrameCounter - 1);
         }
         if (coughFrameCounter >= 4) {
             coughFrameCounter = 0;
+            visionCough = true;
+        } else if (isBodyShakingContinuous && (movementStd > 9.0 || Math.abs(mealMetrics.jawVelocity) > 5.5 || mar > 0.20 || audioEnergy > 0.08)) {
             visionCough = true;
         }
 
@@ -1838,8 +1880,9 @@ async function processVideoFrame(now) {
         }
 
         // 人臉遺失快取處理 (2.0 秒錨點快取手勢；高敏感度 minPts=1)
+        let anchorHandCheck = null;
         if (lastNose && (currentTime - lastAnchorTs) < ANCHOR_GRACE_SEC) {
-            const anchorHandCheck = handNearChestOrThroat(handLandmarks, lastNose, lastChin, w, h, 1);
+            anchorHandCheck = handNearChestOrThroat(handLandmarks, lastNose, lastChin, w, h, 1);
             isHandOnNeck = anchorHandCheck.isThroat;
             handsInDangerZoneCount = anchorHandCheck.handsInZone;
         } else {
@@ -1849,7 +1892,13 @@ async function processVideoFrame(now) {
         isBodyShakingContinuous = false;
         isHandOnChest = false;
         isHandOnChestOrThroat = isHandOnNeck;
-        bodyMotionHistory = [];
+        if (!lastNose || (currentTime - lastAnchorTs) >= ANCHOR_GRACE_SEC) {
+            bodyMotionHistory = [];
+        } else if (anchorHandCheck) {
+            isHandOnChest = anchorHandCheck.isChest;
+            isHandOnChestOrThroat = anchorHandCheck.near;
+            isBodyShakingContinuous = (currentTime - lastBodyShakeTrueAt) <= 0.9;
+        }
         prevNose = null;
         noseSpeedHistory = [];
         coughFrameCounter = 0;
@@ -2040,6 +2089,9 @@ function triggerAlertLevel(level, msg, options = {}) {
         if (level === 'L4' && eventType === 'L4') {
             updateL4WebNotificationEmailStatus(queueL4EmailNotification(eventType, eventLogPromise));
         }
+        if (typeof broadcastSystemState === 'function') {
+            void broadcastSystemState(true);
+        }
     }
 }
 
@@ -2071,6 +2123,9 @@ function playSwallowChimeSound() {
 function showL4WebNotificationToast(msg) {
     const toast = document.getElementById('l4-web-notification-toast');
     if (toast) {
+        if (typeof document !== 'undefined' && document.fullscreenElement && typeof document.fullscreenElement.appendChild === 'function' && toast.parentElement !== document.fullscreenElement) {
+            try { document.fullscreenElement.appendChild(toast); } catch (_) {}
+        }
         const timeEl = document.getElementById('l4-web-notification-time');
         const titleEl = document.getElementById('l4-web-notification-title');
         const bodyEl = document.getElementById('l4-web-notification-body');
@@ -2544,9 +2599,9 @@ function checkContinuousBodyShaking(nose, faceSize, currentTime, w, h) {
     // - 至少 1 次方向折返或明顯前後俯仰尺度變化 (sizeSpan > 0.12)
     // - 位移跨度達 0.10 倍臉長以上
     // - 視窗內累計無因次化速度 > 1.0
-    const hasDirectionReversal = (xDirectionReversals >= 1 || yDirectionReversals >= 1 || sizeSpan > 0.12);
-    const hasSignificantSpan = (xSpan > 0.10 || ySpan > 0.10 || sizeSpan > 0.10);
-    const hasSustainedSpeed = (totalSpeed > 1.0);
+    const hasDirectionReversal = (xDirectionReversals >= 1 || yDirectionReversals >= 1 || sizeSpan > 0.12 || sizeSpan > 0.07);
+    const hasSignificantSpan = (xSpan > 0.10 || ySpan > 0.10 || sizeSpan > 0.10 || xSpan > 0.065 || ySpan > 0.065);
+    const hasSustainedSpeed = (totalSpeed > 1.0 || totalSpeed > 0.65);
 
     return (hasSignificantSpan && hasSustainedSpeed && hasDirectionReversal);
 }
