@@ -7,6 +7,8 @@
  'use strict';
  const API_PREFIX='/api/local/';
  const PAGES_ORIGIN='https://951222-1.github.io';
+ const VERCEL_TEST_ORIGIN='https://antichoke-ui-preview.vercel.app';
+ const PAGES_ORIGINS=new Set([PAGES_ORIGIN,VERCEL_TEST_ORIGIN]);
  const DEFAULT_REMOTE_API_ORIGIN='http://127.0.0.1:18765';
  function errorFrom(envelope,status){
   const item=envelope&&envelope.error||{};
@@ -26,30 +28,51 @@
   if(!location||typeof fetcher!=='function')throw new Error('本機 API 環境未就緒。');
   const page=new URL(location.href);
   const localPage=['localhost','127.0.0.1'].includes(page.hostname)&&['http:','https:'].includes(page.protocol);
-  const pagesPage=page.origin===PAGES_ORIGIN&&page.protocol==='https:';
-  if(!localPage&&!pagesPage)throw new Error('錄影只允許 localhost，或指定的 GitHub Pages 網站。');
+  const pagesPage=PAGES_ORIGINS.has(page.origin)&&page.protocol==='https:';
+  if(!localPage&&!pagesPage)throw new Error('錄影只允許 localhost，或明確核准的公開測試網站。');
   const remoteMode=pagesPage;
-  const origin=remoteMode?(environment.loopbackApiOrigin||DEFAULT_REMOTE_API_ORIGIN):page.origin;
-  const apiUrl=new URL(origin);
-  if(remoteMode&&(!['localhost','127.0.0.1'].includes(apiUrl.hostname)||apiUrl.protocol!=='http:'||apiUrl.username||apiUrl.password))throw new Error('GitHub Pages 模式只允許連到 localhost loopback 服務。');
+  const configuredTunnelOrigin=environment.remoteApiOrigin||root.LOCAL_RECORDING_TUNNEL_CONFIG?.apiOrigin||root.LOCAL_RECORDING_TUNNEL_API_ORIGIN||root.CONFIG?.LOCAL_RECORDING_TUNNEL_API_ORIGIN||'';
+  const tunnelMode=remoteMode&&!!configuredTunnelOrigin;
+  let origin;
+  if(tunnelMode){
+   let tunnelUrl;
+   try{tunnelUrl=new URL(configuredTunnelOrigin);}catch(_){throw new Error('本機錄影隧道網址格式錯誤。');}
+   const approvedTunnelHost=['ngrok-free.app','ngrok-free.dev','ngrok.app'].some(suffix=>tunnelUrl.hostname.endsWith('.'+suffix));
+   if(tunnelUrl.protocol!=='https:'||!approvedTunnelHost||tunnelUrl.username||tunnelUrl.password||tunnelUrl.port||tunnelUrl.pathname!=='/'||tunnelUrl.search||tunnelUrl.hash)throw new Error('只允許設定固定的 HTTPS ngrok API 網址。');
+   origin=tunnelUrl.origin;
+  }else if(remoteMode){
+   origin=environment.loopbackApiOrigin||DEFAULT_REMOTE_API_ORIGIN;
+   const apiUrl=new URL(origin);
+   if(!['localhost','127.0.0.1'].includes(apiUrl.hostname)||apiUrl.protocol!=='http:'||apiUrl.username||apiUrl.password)throw new Error('遠端測試頁只允許連到 localhost loopback 服務。');
+  }else origin=page.origin;
   const read=async response=>{
    let envelope;try{envelope=await response.json();}catch(_){throw errorFrom({error:{code:'LOCAL_RESPONSE_INVALID',message:'本機服務回應格式錯誤。'}},response.status);}
    if(!envelope||typeof envelope!=='object'||!Object.prototype.hasOwnProperty.call(envelope,'data')||!Object.prototype.hasOwnProperty.call(envelope,'error'))throw errorFrom({error:{code:'LOCAL_RESPONSE_INVALID',message:'本機服務回應不符合契約。'}},response.status);
    if(envelope.error||!response.ok)throw errorFrom(envelope,response.status);
    return envelope.data;
   };
-  let configPromise=null,connected=false;
+  let configPromise=null,connected=false,tunnelBasicHeader='';
+  function setTunnelBasicAuth(username,password){
+   if(!tunnelMode)throw Object.assign(new Error('只有比賽隧道模式需要本機連線碼。'),{code:'LOCAL_TUNNEL_NOT_CONFIGURED'});
+   if(typeof username!=='string'||typeof password!=='string'||!username||!password||username.length>128||password.length>256||/[^\x20-\x7E]/.test(username+password))throw Object.assign(new Error('比賽連線碼格式錯誤。'),{code:'LOCAL_BRIDGE_AUTH_INVALID'});
+   const encode=root.btoa||((value)=>typeof Buffer!=='undefined'?Buffer.from(value,'binary').toString('base64'):null);
+   const encoded=encode(`${username}:${password}`);
+   if(!encoded)throw Object.assign(new Error('瀏覽器不支援本機連線驗證。'),{code:'LOCAL_BRIDGE_AUTH_UNAVAILABLE'});
+   tunnelBasicHeader='Basic '+encoded;configPromise=null;connected=false;return true;
+  }
   async function getPermissionState(){
-   if(!remoteMode)return 'granted';
+   if(!remoteMode||tunnelMode)return 'granted';
    if(!permissionManager?.permissions?.query)return 'prompt';
    try{return (await permissionManager.permissions.query({name:'loopback-network'})).state||'prompt';}catch(_){return 'prompt';}
   }
   async function connect(){
    if(configPromise)return configPromise;
+   if(tunnelMode&&!tunnelBasicHeader)throw Object.assign(new Error('請輸入比賽本機連線碼。'),{code:'LOCAL_BRIDGE_AUTH_REQUIRED'});
    configPromise=(async()=>{
+    const headers=tunnelMode?{Authorization:tunnelBasicHeader,'ngrok-skip-browser-warning':'1'}:undefined;
     const response=await fetcher(origin+'/api/local/config',{
-     method:'GET',mode:remoteMode?'cors':'same-origin',credentials:remoteMode?'include':'same-origin',
-     redirect:'error',cache:'no-store',...(remoteMode?{targetAddressSpace:'loopback'}:{})
+     method:'GET',headers,mode:remoteMode?'cors':'same-origin',credentials:remoteMode?'include':'same-origin',
+     redirect:'error',cache:'no-store',...(remoteMode&&!tunnelMode?{targetAddressSpace:'loopback'}:{})
     });
     const config=await read(response);
     if(!config||config.mode!=='local-recording'||typeof config.csrf_token!=='string'||!config.csrf_token)throw new Error('本機服務設定不完整；錄影保持關閉。');
@@ -61,7 +84,7 @@
    try{return await configPromise;}catch(error){configPromise=null;connected=false;throw error;}
   }
   async function request(path,options={}){
-   if(remoteMode&&!configPromise)throw Object.assign(new Error('請先按「連接本機錄影服務」並允許瀏覽器本機網路存取。'),{code:'LOCAL_CONNECT_REQUIRED'});
+   if(remoteMode&&!configPromise)throw Object.assign(new Error(tunnelMode?'請先輸入比賽連線碼並連接本機服務。':'請先按「連接本機錄影服務」並允許瀏覽器本機網路存取。'),{code:'LOCAL_CONNECT_REQUIRED'});
    const config=await connect();
    if(typeof path!=='string'||!path.startsWith(API_PREFIX)||path.includes('\\')||/%(?:2e|2f|5c)/i.test(path)||path.split('?')[0].split('/').some(part=>part==='.'||part==='..'))throw new Error('只允許本機 API 路徑。');
    const target=new URL(path,origin);
@@ -74,13 +97,16 @@
    if(typeof bearer!=='string'||!bearer)throw Object.assign(new Error('請先登入既有照護帳號。'),{code:'SUPABASE_SESSION_REQUIRED',status:401});
    const method=String(options.method||'GET').toUpperCase();
    const headers={...(options.headers||{})};
-   for(const key of Object.keys(headers))if(['authorization','x-local-token'].includes(key.toLowerCase()))delete headers[key];
-   headers.Authorization='Bearer '+bearer;
+   for(const key of Object.keys(headers))if(['authorization','x-local-token','x-supabase-authorization','ngrok-skip-browser-warning'].includes(key.toLowerCase()))delete headers[key];
+   if(tunnelMode){
+    if(!tunnelBasicHeader)throw Object.assign(new Error('請輸入比賽本機連線碼。'),{code:'LOCAL_BRIDGE_AUTH_REQUIRED'});
+    headers.Authorization=tunnelBasicHeader;headers['X-Supabase-Authorization']='Bearer '+bearer;headers['ngrok-skip-browser-warning']='1';
+   }else headers.Authorization='Bearer '+bearer;
    if(!['GET','HEAD'].includes(method))headers['X-Local-Token']=config.csrf_token;
    let body=options.body;
    if(Object.prototype.hasOwnProperty.call(options,'json')){headers['Content-Type']='application/json';body=JSON.stringify(options.json);}
    const response=await fetcher(target.href,{method,headers,body,mode:remoteMode?'cors':'same-origin',
-    credentials:remoteMode?'include':'same-origin',redirect:'error',cache:'no-store',...(remoteMode?{targetAddressSpace:'loopback'}:{})});
+    credentials:remoteMode?'include':'same-origin',redirect:'error',cache:'no-store',...(remoteMode&&!tunnelMode?{targetAddressSpace:'loopback'}:{})});
    return read(response);
   }
   function videoUrl(path){
@@ -89,10 +115,10 @@
    if(target.origin!==origin||!target.pathname.startsWith(API_PREFIX))throw new Error('只允許本機影片路徑。');
    return target.href;
   }
-  const api={connect,request,getPermissionState,videoUrl};
+  const api={connect,request,getPermissionState,videoUrl,setTunnelBasicAuth};
   Object.defineProperties(api,{
-   ready:{get(){return remoteMode&&!configPromise?Promise.reject(Object.assign(new Error('請由使用者動作啟動本機連線。'),{code:'LOCAL_CONNECT_REQUIRED'})):connect();}},
-   isConnected:{get(){return connected;}},isRemote:{value:remoteMode},apiOrigin:{value:origin}
+   ready:{get(){return remoteMode&&!configPromise?Promise.reject(Object.assign(new Error(tunnelMode?'請輸入比賽連線碼後連接本機服務。':'請由使用者動作啟動本機連線。'),{code:'LOCAL_CONNECT_REQUIRED'})):connect();}},
+   isConnected:{get(){return connected;}},isRemote:{value:remoteMode},isTunnel:{value:tunnelMode},apiOrigin:{value:origin}
   });
   if(!remoteMode)void connect().catch(()=>{});
   return Object.freeze(api);
@@ -127,18 +153,16 @@
   try{if(typeof root?.getCurrentMealSessionInsertPromise==='function')return root.getCurrentMealSessionInsertPromise();}catch(_){}
   try{return typeof currentMealSessionInsertPromise!=='undefined'?currentMealSessionInsertPromise:Promise.resolve(null);}catch(_){return Promise.resolve(null);}
  }
- function addPatientConsentControl(root){
+ function addPatientConsentControl(root,api){
   const doc=root.document,save=doc?.getElementById('btn-save-new-patient');
   if(!save||doc.getElementById('new-patient-local-recording'))return;
-  const label=doc.createElement('label');label.id='new-patient-local-recording-label';label.className='ui-patient-recording-optin';
-  const input=doc.createElement('input');input.type='checkbox';input.id='new-patient-local-recording';input.checked=true;input.className='ui-patient-recording-optin-checkbox';
-  const copy=doc.createElement('span');copy.className='ui-patient-recording-optin-copy';
-  const title=doc.createElement('strong');title.className='ui-patient-recording-optin-title';title.textContent='需要整餐錄影（只有影像，不收錄音）';
-  const details=doc.createElement('span');details.className='ui-patient-recording-optin-details';details.textContent='預設啟用整餐無聲錄影；如本個案不需錄影可取消勾選。開始前請口頭提醒本人。影片只保存在這台電腦，不會上傳到 Supabase；本機錄影服務連線後才會保存設定，照護端可關閉。';
-  copy.append(title,details);label.append(input,copy);
+  const label=doc.createElement('label');label.className='flex items-start gap-3 rounded-2xl border border-blue-900 bg-slate-900 p-3 text-left cursor-pointer';
+  const input=doc.createElement('input');input.type='checkbox';input.id='new-patient-local-recording';input.checked=false;input.className='mt-1 h-5 w-5 accent-blue-500';
+  const text=doc.createElement('span');text.className='text-xs leading-relaxed text-slate-200';
+  const strong=doc.createElement('strong');strong.className='block text-blue-300';strong.textContent='是否要錄影留存？（預設關閉）';
+  const detail=root.document.createElement('span');detail.textContent=api.isTunnel?'比賽展示會將影像經 ngrok 傳到錄影電腦；影片檔只存本機資料夾，不會存到雲端。':'勾選後啟用本機無聲整餐錄影；影片只保存在這台電腦，不會上傳至雲端。';text.append(strong,detail);label.append(input,text);
   save.parentElement?.parentElement?.insertBefore(label,save.parentElement);
  }
-
  function wrap(root,name,makeWrapper){
   const original=root[name];if(typeof original!=='function'||original.__localRecordingWrapped)return;
   const wrapped=makeWrapper(original);wrapped.__localRecordingWrapped=true;root[name]=wrapped;
@@ -148,64 +172,66 @@
   const recorder=ui.initialize({api});
   const connectButton=root.document?.getElementById('local-recording-connect');
   const connectPanel=root.document?.getElementById('local-recording-connect-panel');
+  const tunnelPasswordInput=root.document?.getElementById('local-recording-tunnel-password');
   const connectStatus=root.document?.getElementById('local-recording-connect-status');
   attachLogoutRevocation(root,api);
-  addPatientConsentControl(root);
-  let selectedId=null,consent=false,consentKnown=false,consentGeneration=0,creatingPatient=false,startLocked=false,channel=null;
-  const offlineOptInBlock=new Set();
+  addPatientConsentControl(root,api);
+  let selectedId=null,consent=false,consentGeneration=0,creatingPatient=false,startLocked=false,channel=null,pendingConsent=null;
   function say(text,state='selected'){
-   const status=root.document?.getElementById('local-recording-status');
-   if(!status)return;
-   status.hidden=!text;status.textContent=text;status.dataset.state=state;
-  }
-  function canRecordThisMeal(profile){return !!(profile?.id&&api.isConnected&&!offlineOptInBlock.has(profile.id)&&consentKnown&&consent&&selectedId===profile.id&&getPatient(root)?.id===profile.id);}
-  function noRecordingReason(profile){
-   if(!profile?.id)return '未選擇個案；本餐不會錄影。';
-   if(getPatient(root)?.id!==profile.id)return '個案已切換；本餐不會錄影。用餐監測已開始。';
-   if(!api.isConnected)return '本機錄影服務未連線；本餐不會錄影。用餐監測已開始。';
-   if(offlineOptInBlock.has(profile.id))return '新增個案時的錄影設定尚未保存；照護端重新確認前不會錄影。';
-   if(selectedId!==profile.id||!consentKnown)return '無法確認此個案的錄影設定；本餐不會錄影。用餐監測已開始。';
-   return '照護端尚未為此個案啟用本機錄影；本餐不會錄影。用餐監測已開始。';
+   const status=root.document?.getElementById('local-recording-status');if(status){status.hidden=!text;status.textContent=text;status.dataset.state=state;}
   }
   async function connectLocalService(){
-   if(api.isConnected){if(connectPanel)connectPanel.hidden=true;const profile=getPatient(root);if(profile)await loadConsent(profile);return true;}
+   if(api.isConnected)return true;
    if(connectButton)connectButton.disabled=true;
    try{
+    if(api.isTunnel){
+     const passcode=tunnelPasswordInput?.value||'';
+     if(!passcode)throw Object.assign(new Error('請輸入比賽本機連線碼。'),{code:'LOCAL_BRIDGE_AUTH_REQUIRED'});
+     api.setTunnelBasicAuth('judge',passcode);
+    }
     await api.connect();
+    if(tunnelPasswordInput)tunnelPasswordInput.value='';
     if(connectPanel)connectPanel.hidden=true;else if(connectButton)connectButton.hidden=true;
     attachLogoutRevocation(root,api);
+    if(pendingConsent){
+     const pending=pendingConsent;
+     try{await api.request('/api/local/consent',{method:'PUT',json:{patient_id:pending.patientId,enabled:pending.enabled}});pendingConsent=null;}
+     catch(error){say('本機同意設定未儲存；錄影仍保持關閉。請在照護端重新確認。','error');return false;}
+    }
     const profile=getPatient(root);if(profile)await loadConsent(profile);
+    say('本機錄影服務已連線；影片只會存放在這台電腦。','selected');
     return true;
    }catch(error){
     if(connectButton)connectButton.disabled=false;
-    const message=error?.code==='LOCAL_NETWORK_PERMISSION_DENIED'?'瀏覽器拒絕了本機網路權限；請在網址列的網站權限中允許後重試。':'無法連接本機錄影服務；請啟動本機伴隨服務並允許瀏覽器連線。';
+    const message=error?.code==='LOCAL_BRIDGE_AUTH_REQUIRED'?'請輸入比賽本機連線碼。':error?.status===401?'比賽連線碼或登入驗證失敗；影片仍未保存。':error?.code==='LOCAL_NETWORK_PERMISSION_DENIED'?'瀏覽器拒絕了本機網路權限；請在網址列的網站權限中允許後重試。':'無法連接本機錄影服務；請確認服務與比賽隧道已啟動。';
     say(message,'error');return false;
    }
   }
   if(connectButton)connectButton.addEventListener('click',()=>void connectLocalService());
-  if(api.isRemote){
+  if(tunnelPasswordInput)tunnelPasswordInput.hidden=!api.isTunnel;
+  if(api.isTunnel){
+   if(connectPanel)connectPanel.hidden=false;
+   if(connectStatus)connectStatus.textContent='比賽 HTTPS 隧道會把瀏覽器錄影轉送至你的電腦；影片檔只存放在本機。請輸入比賽連線碼。';
+   say('請輸入比賽連線碼並按「連接本機服務」；未連線前不會錄影或上傳。','selected');
+  }else if(api.isRemote){
    void api.getPermissionState().then(state=>{
     if(state==='granted')void connectLocalService();
-    else if(connectStatus)connectStatus.textContent=state==='denied'
-     ?'瀏覽器尚未允許此網站存取本機錄影服務；開始用餐前可按此處並依網站權限提示操作。'
-     :'如要錄影，請在開始用餐前連接本機服務；瀏覽器會詢問本機網路權限。';
+    else if(state==='denied')say('瀏覽器尚未允許此網站存取本機錄影服務。請按「連接本機服務」並依提示調整網站權限。','error');
+    else say('請先按「連接本機服務」；連線時瀏覽器會詢問本機網路權限。','selected');
    });
   }else void connectLocalService();
   async function loadConsent(profile){
-   if(!profile?.id){selectedId=null;consent=false;consentKnown=false;ui.selectPatient(null);say('');return false;}
-   if(offlineOptInBlock.has(profile.id)){selectedId=profile.id;consent=false;consentKnown=false;ui.selectPatient({...profile,recording_enabled:false});say('新增個案時的錄影設定尚未保存；照護端重新確認前不會錄影。','error');return false;}
-   selectedId=profile.id;consent=false;consentKnown=false;const generation=++consentGeneration;
+   if(!profile?.id){selectedId=null;consent=false;ui.selectPatient(null);say('');return false;}
+   selectedId=profile.id;consent=false;const generation=++consentGeneration;
    ui.selectPatient({...profile,recording_enabled:false});
-   if(!api.isConnected){say('本機錄影服務未連線；用餐監測仍可使用，但不會錄影。','selected');return false;}
+   if(!api.isConnected){say('請先連接本機錄影服務；未連線時不會保存影片或同意狀態。','selected');return false;}
    try{
     const result=await api.request('/api/local/consent?patient_id='+encodeURIComponent(profile.id));
     if(generation!==consentGeneration||selectedId!==profile.id)return false;
-    if(!result||result.patient_id!==profile.id||typeof result.recording_enabled!=='boolean')throw new Error('本機錄影設定格式錯誤。');
     consent=result.recording_enabled===true;
-    consentKnown=true;
     ui.selectPatient({...profile,recording_enabled:consent});
     say(consent?'此個案已啟用整餐無聲錄影；影片只保存在這台電腦。':'本機錄影未啟用；原有即時偵測照常運作。',consent?'selected':'idle');
-   }catch(error){if(generation===consentGeneration){consent=false;consentKnown=false;ui.selectPatient({...profile,recording_enabled:false});say('本機錄影服務或登入驗證不可用；錄影保持關閉，原有偵測照常運作。','error');}return false;}
+   }catch(error){if(generation===consentGeneration){consent=false;ui.selectPatient({...profile,recording_enabled:false});say('本機錄影服務或登入驗證不可用；錄影保持關閉，原有偵測照常運作。','error');}return false;}
    return consent;
   }
   function installConsentChannel(patientId){
@@ -214,10 +240,10 @@
    channel=new root.BroadcastChannel('local-recording-consent:'+patientId);
    channel.onmessage=event=>{
     if(event.data?.patientId!==selectedId)return;
-    const profile=getPatient(root);
-    offlineOptInBlock.delete(event.data.patientId);
-    if(event.data.enabled!==true){consentGeneration++;consent=false;consentKnown=false;void recorder.end();if(profile)ui.selectPatient({...profile,recording_enabled:false});say('照護端已關閉本機錄影；目前影片會保留在這台電腦。','idle');return;}
-    if(profile){say('照護端已更新錄影設定；正在重新確認本機狀態。','selected');void loadConsent(profile);}
+    consent=event.data.enabled===true;
+    if(!consent)void recorder.end();
+    const profile=getPatient(root);if(profile)ui.selectPatient({...profile,recording_enabled:consent});
+    say(consent?'照護端已啟用本機無聲錄影。':'照護端已關閉本機錄影；目前影片會保留在這台電腦。',consent?'selected':'idle');
    };
   }
   function observeSelectedPatient(){const profile=getPatient(root);if(profile&&profile.id!==selectedId){installConsentChannel(profile.id);void loadConsent(profile);}}
@@ -228,31 +254,25 @@
   });
   wrap(root,'saveAndLoginNewPatient',original=>async function(...args){
    const before=getPatient(root)?.id||null;
-   const requested=root.document?.getElementById('new-patient-local-recording')?.checked===true;
+   const requested=!!root.document?.getElementById('new-patient-local-recording')?.checked;
    creatingPatient=true;
    try{await original.apply(this,args);}finally{creatingPatient=false;}
    const profile=getPatient(root);
    if(profile?.id&&profile.id!==before){
-    installConsentChannel(profile.id);
-    if(!api.isConnected){offlineOptInBlock.add(profile.id);selectedId=profile.id;consent=false;consentKnown=false;ui.selectPatient({...profile,recording_enabled:false});say(requested?'個案已建立；錄影啟用尚未保存。請連接本機服務，並由照護端面板啟用。':'個案已建立；錄影保持關閉。連接本機服務後，如需錄影，請由照護端面板啟用。','error');return;}
-    try{await api.request('/api/local/consent',{method:'PUT',json:{patient_id:profile.id,enabled:requested}});}
-    catch(error){offlineOptInBlock.add(profile.id);if(getPatient(root)?.id!==profile.id)return;selectedId=profile.id;consent=false;consentKnown=false;ui.selectPatient({...profile,recording_enabled:false});say('個案已建立；錄影設定未保存，錄影保持關閉。請確認本機服務與登入狀態。','error');return;}
-    offlineOptInBlock.delete(profile.id);
-    if(getPatient(root)?.id!==profile.id)return;
-    await loadConsent(profile);
+    if(!api.isConnected){pendingConsent={patientId:profile.id,enabled:requested};selectedId=profile.id;consent=false;installConsentChannel(profile.id);ui.selectPatient({...profile,recording_enabled:false});say('個案已建立；請先連接本機服務，才能儲存本機同意設定。','error');return;}
+    try{await api.request('/api/local/consent',{method:'PUT',json:{patient_id:profile.id,enabled:requested}});installConsentChannel(profile.id);await loadConsent(profile);}
+    catch(error){consent=false;selectedId=profile.id;ui.selectPatient({...profile,recording_enabled:false});say('個案已建立；本機同意設定未儲存，錄影保持關閉。','error');}
    }
   });
   wrap(root,'startMealSession',original=>async function(...args){
    if(startLocked)return;startLocked=true;
-   const profile=getPatient(root);
    try{
+    const profile=getPatient(root);
+    const recordThisMeal=!!(profile?.id&&selectedId===profile.id&&api.isConnected&&consent);
+    // Preserve transient user activation (for fullscreen); consent/network reads happen before the user taps Start.
     const result=await original.apply(this,args);
-    if(root.isMealSessionActive?.()){
-     if(!profile?.id||getPatient(root)?.id!==profile.id){say(noRecordingReason(profile),'idle');return result;}
-     const consentEnabled=await loadConsent(profile);
-     if(root.isMealSessionActive?.()&&getPatient(root)?.id===profile.id&&consentEnabled===true&&canRecordThisMeal(profile)){
-      if(!recorder.begin({id:profile.id,recording_enabled:true},getSessionPromise(root)))say('用餐監測已開始，但本機錄影未能啟動。請查看本機服務狀態。','error');
-     }else say(noRecordingReason(profile),'idle');
+    if(root.isMealSessionActive?.()&&recordThisMeal){
+     recorder.begin({id:profile.id,recording_enabled:true},getSessionPromise(root));
     }
     return result;
    }finally{startLocked=false;}
@@ -284,6 +304,8 @@
   const toggle=root.document.getElementById('local-recording-consent-toggle');
   const connectButton=root.document.getElementById('local-recording-connect');
   const connectPanel=root.document.getElementById('local-recording-connect-panel');
+  const tunnelPasswordInput=root.document.getElementById('local-recording-tunnel-password');
+  const connectStatus=root.document.getElementById('local-recording-connect-status');
   const status=root.document.getElementById('local-recording-panel-status');
   let selectedId=null,profile=null,generation=0,connecting=false;
   const say=text=>{if(status){status.hidden=!text;status.textContent=text;}};
@@ -320,18 +342,29 @@
    if(api.isConnected)return true;
    if(connecting)return false;connecting=true;if(connectButton)connectButton.disabled=true;
    try{
+    if(api.isTunnel){
+     const passcode=tunnelPasswordInput?.value||'';
+     if(!passcode)throw Object.assign(new Error('請輸入比賽本機連線碼。'),{code:'LOCAL_BRIDGE_AUTH_REQUIRED'});
+     api.setTunnelBasicAuth('judge',passcode);
+    }
     await api.connect();
+    if(tunnelPasswordInput)tunnelPasswordInput.value='';
     if(connectPanel)connectPanel.hidden=true;else if(connectButton)connectButton.hidden=true;
     attachLogoutRevocation(root,api);say('本機錄影服務已連線；影片只會存放在這台電腦。');
     await syncPatient();return true;
    }catch(error){
     if(connectButton)connectButton.disabled=false;
-    say(error?.code==='LOCAL_NETWORK_PERMISSION_DENIED'?'瀏覽器拒絕了本機網路權限；請在網址列的網站權限中允許後重試。':'無法連接本機錄影服務；請啟動本機伴隨服務並允許瀏覽器連線。');
+    say(error?.code==='LOCAL_BRIDGE_AUTH_REQUIRED'?'請輸入比賽本機連線碼。':error?.status===401?'比賽連線碼或登入驗證失敗；影片仍未保存。':'無法連接本機錄影服務；請確認服務與比賽隧道已啟動。');
     return false;
    }finally{connecting=false;}
   }
   if(connectButton)connectButton.addEventListener('click',()=>void connectLocalService());
-  if(api.isRemote){
+  if(tunnelPasswordInput)tunnelPasswordInput.hidden=!api.isTunnel;
+  if(api.isTunnel){
+   if(connectPanel)connectPanel.hidden=false;
+   if(connectStatus)connectStatus.textContent='比賽 HTTPS 隧道會把瀏覽器影片轉送至你的電腦；影片檔只存放在本機。請輸入比賽連線碼。';
+   say('請輸入比賽連線碼並按「連接本機錄影服務」；未連線前不會讀取影片。');
+  }else if(api.isRemote){
    void api.getPermissionState().then(state=>{
     if(state==='granted')void connectLocalService();
     else if(state==='denied')say('瀏覽器尚未允許此網站存取本機錄影服務；請按連線按鈕並依網站權限提示操作。');

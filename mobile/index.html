@@ -1,12 +1,13 @@
 <!DOCTYPE html>
-<html lang="zh-TW" class="dark" data-ui-theme="milktea">
+<html lang="zh-TW" data-theme="milk-tea">
 <head>
     <meta charset="UTF-8">
+    <meta name="theme-color" content="#f7f1e8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>防哽咽 AI 即時監測 —— 被照護者相機端</title>
+    <title>防哽咽人工智慧即時監測——被照護者相機端</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Supabase JS Client -->
@@ -19,96 +20,401 @@
         window.FaceLandmarker = vision.FaceLandmarker;
         window.HandLandmarker = vision.HandLandmarker;
     </script>
-    <!-- MediaPipe Tasks Audio CDN (Google YAMNet AI 咳嗽聲辨識模型) -->
-    <script type="module">
-        import * as audioTasks from "https://cdn.jsdelivr.net/npm/@mediapipe/tasks-audio@0.10.0";
-        window.tasksAudio = audioTasks;
-        window.AudioFilesetResolver = audioTasks.FilesetResolver;
-        window.AudioClassifier = audioTasks.AudioClassifier;
+    <link rel="stylesheet" href="style.css?v=desktop-e67ac1e9f6f9">
+    <!-- 🛡️ 全域優先同步定義 (不依賴任何外部檔案載入時序，開箱即用) -->
+    <script>
+        window.currentPatient = window.currentPatient || { id: null, patient_code: 'P001', full_name: '王爺爺 (軟食)', diet_type: 'soft', baseline_chew: 0.85, baseline_swallow: 1.10 };
+        window.currentDiet = window.currentDiet || 'soft';
+
+        // ====== 個案清單與新增帳號管理 ======
+        function getPatientList() {
+            try {
+                var s = localStorage.getItem('anti_choke_patient_list');
+                if (s) return JSON.parse(s);
+            } catch (e) {}
+            return [
+                { code: 'P001', name: '王爺爺', gender: '男', diet: 'soft', note: '82歲 · 軟食' },
+                { code: 'P002', name: '陳奶奶', gender: '女', diet: 'pureed', note: '78歲 · 碎食' },
+                { code: 'P003', name: '林伯伯', gender: '男', diet: 'regular', note: '85歲 · 普通餐' }
+            ];
+        }
+
+        function renderPatientList() {
+            var list = getPatientList();
+            var container = document.getElementById('patient-list-container');
+            if (!container) return;
+            container.innerHTML = '';
+            list.forEach(function(p) {
+                var btn = document.createElement('button');
+                btn.type = 'button';
+                btn.className = 'patient-select-btn w-full bg-slate-800 hover:bg-slate-700 text-slate-200 p-3 rounded-2xl font-semibold text-left flex items-center justify-between border border-slate-700 transition';
+                btn.setAttribute('data-patient-code', p.code);
+                btn.setAttribute('data-patient-name', p.name + ' (' + (p.gender === '女' ? '女' : '男') + ')');
+                var icon = p.gender === '女' ? '👵' : '👴';
+                var note = p.note || ((p.gender === '女' ? '女性' : '男性') + '個案');
+                btn.innerHTML = '<span style="pointer-events: none;">' + icon + ' ' + p.name + ' (' + p.code + ')</span>' +
+                                '<span style="pointer-events: none;" class="text-xs text-blue-400">' + note + '</span>';
+                btn.onclick = function() {
+                    window.loginAsPatient(p.code, p.name + ' (' + (p.gender === '女' ? '女' : '男') + ')');
+                };
+                container.appendChild(btn);
+            });
+        }
+
+        function showAddPatientView() {
+            var v1 = document.getElementById('patient-select-view');
+            var v2 = document.getElementById('patient-add-view');
+            if (v1) v1.classList.add('hidden');
+            if (v2) v2.classList.remove('hidden');
+            var input = document.getElementById('new-patient-name');
+            if (input) {
+                input.value = '';
+                input.focus();
+            }
+            var recordingConsent = document.getElementById('new-patient-local-recording');
+            if (recordingConsent) recordingConsent.checked = false;
+        }
+
+        function showPatientListView() {
+            var v1 = document.getElementById('patient-select-view');
+            var v2 = document.getElementById('patient-add-view');
+            if (v2) v2.classList.add('hidden');
+            if (v1) v1.classList.remove('hidden');
+            renderPatientList();
+        }
+
+        async function saveAndLoginNewPatient() {
+            var nameInput = document.getElementById('new-patient-name');
+            var name = nameInput ? nameInput.value.trim() : '';
+            if (!name) {
+                alert('請輸入個案姓名或稱呼！');
+                return;
+            }
+            var genderEl = document.querySelector('input[name="new-patient-gender"]:checked');
+            var gender = genderEl ? genderEl.value : '男';
+
+            var list = getPatientList();
+            var code = 'P' + String(list.length + 1).padStart(3, '0');
+            var newPatient = {
+                code: code,
+                name: name,
+                gender: gender,
+                diet: 'regular',
+                note: (gender === '女' ? '👩 女性' : '👨 男性') + ' · 新增個案'
+            };
+            list.push(newPatient);
+            localStorage.setItem('anti_choke_patient_list', JSON.stringify(list));
+            renderPatientList();
+            showPatientListView();
+            await window.loginAsPatient(code, name + ' (' + gender + ')');
+        }
+
+        // ====== 嗆咳紀錄管理 ======
+        function getCoughRecords() {
+            try {
+                var s = localStorage.getItem('anti_choke_cough_records');
+                if (s) return JSON.parse(s);
+            } catch (e) {}
+            return [];
+        }
+
+        function recordCoughEvent(typeStr, detailStr) {
+            var patientName = (window.currentPatient && window.currentPatient.full_name) ? window.currentPatient.full_name : '未知個案';
+            var patientCode = (window.currentPatient && window.currentPatient.patient_code) ? window.currentPatient.patient_code : 'P001';
+            var now = new Date();
+            var timeStr = now.toLocaleTimeString('zh-TW', { hour12: false });
+            var dateStr = (now.getMonth() + 1) + '/' + now.getDate();
+
+            var item = {
+                id: Date.now(),
+                patientCode: patientCode,
+                patientName: patientName,
+                time: dateStr + ' ' + timeStr,
+                type: typeStr || '咳嗽偵測',
+                detail: detailStr || '背景靜默紀錄，無警報干擾'
+            };
+
+            var logs = getCoughRecords();
+            logs.unshift(item);
+            if (logs.length > 100) logs.pop();
+            localStorage.setItem('anti_choke_cough_records', JSON.stringify(logs));
+            updateCoughBadge();
+        }
+
+        function updateCoughBadge() {
+            var logs = getCoughRecords();
+            var badge = document.getElementById('header-cough-badge');
+            if (badge) badge.innerText = logs.length;
+            var foot = document.getElementById('footer-cough-count');
+            if (foot) foot.innerText = logs.length;
+        }
+
+        function renderCoughRecords() {
+            var logs = getCoughRecords();
+            var listEl = document.getElementById('cough-record-list');
+            var mealCntEl = document.getElementById('cough-modal-meal-count');
+            var totalCntEl = document.getElementById('cough-modal-total-count');
+            var patientInfoEl = document.getElementById('cough-modal-patient-info');
+
+            if (patientInfoEl) {
+                var cur = window.currentPatient;
+                patientInfoEl.innerText = cur ? ('個案：' + cur.full_name) : '個案：尚未登入';
+            }
+            if (mealCntEl) {
+                mealCntEl.innerText = (window.mealMetrics && window.mealMetrics.coughCount) ? window.mealMetrics.coughCount : logs.length;
+            }
+            if (totalCntEl) {
+                totalCntEl.innerText = logs.length;
+            }
+
+            if (!listEl) return;
+            if (logs.length === 0) {
+                listEl.innerHTML = '<div class="text-center py-8 text-slate-500 text-xs"><span class="text-3xl block mb-2">🍵</span>目前無任何嗆咳事件紀錄<br>長者進食狀況良好</div>';
+                return;
+            }
+
+            var html = '';
+            logs.forEach(function(item) {
+                var typeLabel = String(item.type || '嗆咳紀錄').replace('聽覺 YAMNet 咳嗽聲', '聲音辨識咳嗽特徵');
+                html += '<div class="bg-slate-800/70 border border-slate-700/60 p-2.5 rounded-2xl flex items-center justify-between text-xs">' +
+                        '  <div>' +
+                        '    <div class="flex items-center space-x-2">' +
+                        '      <span class="font-bold text-rose-400">⚠️ ' + typeLabel + '</span>' +
+                        '      <span class="text-[10px] text-slate-400 font-mono">' + item.time + '</span>' +
+                        '    </div>' +
+                        '    <div class="text-[11px] text-slate-400 mt-0.5">' + item.detail + '</div>' +
+                        '  </div>' +
+                        '  <span class="text-[10px] bg-emerald-950/60 text-emerald-400 px-2 py-0.5 rounded-lg border border-emerald-800/40">已存檔</span>' +
+                        '</div>';
+            });
+            listEl.innerHTML = html;
+        }
+
+        function openCoughRecordModal() {
+            renderCoughRecords();
+            var m = document.getElementById('cough-record-modal');
+            if (m) {
+                m.style.display = 'flex';
+                m.classList.remove('hidden');
+            }
+        }
+
+        function closeCoughRecordModal() {
+            var m = document.getElementById('cough-record-modal');
+            if (m) {
+                m.style.display = 'none';
+                m.classList.add('hidden');
+            }
+        }
+
+        function clearAllCoughRecords() {
+            if (confirm('確定要清除所有歷史嗆咳紀錄嗎？')) {
+                localStorage.removeItem('anti_choke_cough_records');
+                if (window.mealMetrics) window.mealMetrics.coughCount = 0;
+                renderCoughRecords();
+                updateCoughBadge();
+            }
+        }
+
+        function openLoginModal() {
+            showPatientListView();
+            var m = document.getElementById('login-modal');
+            if (m) {
+                m.style.display = 'flex';
+                m.classList.remove('hidden');
+            }
+        }
+
+        function closeLoginModal() {
+            var m = document.getElementById('login-modal');
+            if (m) {
+                m.style.display = 'none';
+                m.classList.add('hidden');
+            }
+        }
+
+        function selectDiet(dietKey) {
+            window.currentDiet = dietKey;
+            document.querySelectorAll('.diet-btn').forEach(function(btn) {
+                btn.classList.remove('active', 'bg-blue-600', 'text-white');
+            });
+            var activeBtn = document.getElementById('btn-diet-' + dietKey);
+            if (activeBtn) activeBtn.classList.add('active', 'bg-blue-600', 'text-white');
+            var hud = document.getElementById('hud-diet');
+            if (hud) hud.innerText = dietKey === 'regular' ? '普通餐食' : (dietKey === 'pureed' ? '碎食餐' : '軟食餐盒');
+        }
+
+        function loginAsPatient(code, nameStr) {
+            console.log('[Login] Direct loginAsPatient executed:', code, nameStr);
+            window._selectedPatient = { code: code, nameStr: nameStr };
+            window.currentPatient.patient_code = code;
+            window.currentPatient.full_name = nameStr;
+            
+            // 立即關閉 Modal
+            closeLoginModal();
+            
+            // 更新 UI 標籤
+            var label = document.getElementById('current-patient-label');
+            if (label) label.innerText = nameStr + ' (' + code + ')';
+
+            // 只準備個案；相機與全螢幕由「開始用餐」的點擊啟動。
+            if (typeof window._fullLoginAsPatient === 'function') {
+                window._fullLoginAsPatient(code, nameStr);
+            }
+        }
+
+        // 雙向掛載至 window
+        window.openLoginModal = openLoginModal;
+        window.closeLoginModal = closeLoginModal;
+        window.selectDiet = selectDiet;
+        window.loginAsPatient = loginAsPatient;
+        window.getPatientList = getPatientList;
+        window.renderPatientList = renderPatientList;
+        window.showAddPatientView = showAddPatientView;
+        window.showPatientListView = showPatientListView;
+        window.saveAndLoginNewPatient = saveAndLoginNewPatient;
+        window.getCoughRecords = getCoughRecords;
+        window.recordCoughEvent = recordCoughEvent;
+        window.openCoughRecordModal = openCoughRecordModal;
+        window.closeCoughRecordModal = closeCoughRecordModal;
+        window.clearAllCoughRecords = clearAllCoughRecords;
+        window.updateCoughBadge = updateCoughBadge;
     </script>
-    <link rel="stylesheet" href="style.css?v=20261115_mirrorfix">
-    <link rel="stylesheet" href="ui-refresh.css?v=20261115_9aadfbf">
     <!-- 核心設定與應用腳本引用 (置於 Head 提前解析) -->
-    <script src="config.js?v=20261116_c4e91a2"></script>
-    <script src="connection-core.js?v=20261116_c4e91a2"></script>
-    <script src="auth-ui.js?v=20261116_c4e91a2"></script>
-    <script src="app.js?v=20261116_c4e91a2"></script>
+    <script src="config.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="connection-core.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="ui-font-size.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="auth-ui.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="detection-policy.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="sensor-features.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="detection-runtime.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="l4-safety.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="meal-view.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="app.js?v=desktop-e67ac1e9f6f9"></script>
 </head>
 <body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col justify-between select-none">
 
     <!-- 頂部 Header 導覽條 -->
-    <header class="bg-slate-900/90 backdrop-blur border-b border-slate-800 px-4 py-3 flex items-center justify-between sticky top-0 z-40">
+    <header class="patient-header bg-slate-900/90 backdrop-blur border-b border-slate-800 px-4 py-3 flex items-center justify-end sticky top-0 z-40">
         <div class="flex items-center space-x-2">
-            <span class="text-2xl">🛡️</span>
-            <div>
-                <h1 class="font-bold text-base text-blue-400 leading-tight">防哽咽 AI 即時監測</h1>
-                <p class="text-[11px] text-slate-400" id="current-patient-label">尚未登入個案</p>
-            </div>
-        </div>
-        <div class="flex items-center space-x-2">
-            <button id="btn-cough-records" type="button" onclick="openCoughRecordModal()" disabled class="text-xs bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 border border-rose-800/60 px-2.5 py-1.5 rounded-lg font-semibold flex items-center space-x-1.5 transition shadow disabled:opacity-50 disabled:cursor-not-allowed">
+            <button id="btn-cough-records" onclick="openCoughRecordModal()" class="text-xs bg-rose-950/60 hover:bg-rose-900/80 text-rose-300 border border-rose-800/60 px-2.5 py-1.5 rounded-lg font-semibold flex items-center space-x-1.5 transition shadow">
                 <span>📋 嗆咳紀錄</span>
                 <span id="header-cough-badge" class="bg-rose-600 text-white font-bold text-[10px] px-1.5 py-0.2 rounded-full min-w-[16px] text-center">0</span>
             </button>
-            <button id="btn-login-modal" type="button" onclick="openLoginModal()" disabled class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1.5 rounded-lg border border-slate-700 transition disabled:opacity-50 disabled:cursor-not-allowed">
+            <button id="btn-login-modal" onclick="openLoginModal()" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-2.5 py-1.5 rounded-lg border border-slate-700 transition">
                 🔑 身分切換
             </button>
+            <a href="caregiver.html" target="_blank" class="text-xs bg-blue-600/30 hover:bg-blue-600/50 text-blue-300 border border-blue-500/40 px-2.5 py-1.5 rounded-lg font-semibold transition">
+                🖥️ 照護儀表板
+            </a>
         </div>
     </header>
 
-    <section id="ui-refresh-controls" class="ui-refresh-toolbar ui-refresh-toolbar--patient" aria-label="待機資訊與字體設定">
-        <div class="ui-refresh-clock" aria-live="polite">
-            <p id="idle-greeting" class="ui-refresh-greeting">歡迎使用</p>
-            <div class="ui-refresh-date-line">
-                <time id="idle-date" datetime="">日期</time>
-                <span id="idle-weekday">星期</span>
-                <time id="idle-time" class="ui-refresh-time" datetime="">--:--</time>
-            </div>
-        </div>
-        <div class="ui-refresh-font-controls" aria-label="字體大小調整">
-            <span class="ui-refresh-font-label">字體</span>
-            <button id="ui-font-decrease" type="button" aria-label="縮小字體">A−</button>
-            <output id="ui-font-percent" class="ui-refresh-font-value" aria-live="polite">100%</output>
-            <button id="ui-font-increase" type="button" aria-label="放大字體">A＋</button>
-        </div>
-    </section>
-
     <!-- 主要相機與 AI 監測內容區 -->
-    <main class="flex-1 max-w-md w-full mx-auto p-4 flex flex-col justify-center space-y-4">
-        <p id="local-recording-live" hidden role="status" aria-live="polite" class="ui-recording-live">● 本機錄影中（無聲）</p>
+    <main class="flex-1 max-w-md w-full mx-auto p-4 flex flex-col justify-center gap-4">
+
+        <p id="local-recording-status" hidden role="status" aria-live="polite" class="rounded-xl border border-slate-700 bg-slate-900 p-3 text-xs text-slate-200"></p>
+        <div id="local-recording-live" hidden role="status" aria-live="polite" class="fixed bottom-24 right-4 z-[60] rounded-xl border border-rose-700 bg-rose-950/95 px-4 py-3 text-sm font-bold text-rose-100 shadow-xl"></div>
+
+        <section class="monitor-notices" aria-label="照護提醒">
+            <div id="pre-alarm-panel" class="hidden" role="status"><p id="pre-alarm-message"></p><button id="btn-ack-pre-alarm" type="button" onclick="acknowledgePreAlarm()">確認／靜音本次預警（仍可升級）</button></div>
+            <p id="caregiver-reminder" class="hidden" role="status"></p>
+
+        </section>
+
 
         <!-- AI 相機 Viewport 與 Canvas 繪圖面板 -->
         <div id="camera-container" class="relative w-full aspect-[3/4] sm:aspect-[4/3] bg-black rounded-2xl overflow-hidden border-2 border-slate-800 shadow-2xl transition-all duration-300">
             <!-- 隱藏式 Video 標籤用於擷取 WebCam -->
             <video id="webcam-video" class="hidden" playsinline muted></video>
-
-            <!-- Canvas 用於繪製即時骨架、粉紅喉嚨圈與下巴波形 -->
+            
+            <!-- 背景持續偵測；僅顯示本幀有效的嘴巴輪廓與喉嚨感應圈 -->
             <canvas id="ai-canvas" class="w-full h-full object-contain"></canvas>
 
-            <!-- 待機狀態提示層 (選完個案後先待機，按下開始用餐才開啟鏡頭與建立雲端紀錄) -->
-            <div id="standby-overlay" class="absolute inset-0 bg-slate-950/95 backdrop-blur-sm flex flex-col items-center justify-center p-6 text-center space-y-3 z-20">
-                <span class="text-5xl" id="standby-icon">🛡️</span>
-                <h3 id="standby-title" class="font-bold text-slate-100 text-base">請先登入並選擇個案</h3>
-                <p id="standby-desc" class="text-xs text-slate-400 leading-relaxed max-w-xs">通過照護帳號驗證並選擇個案後將進入待機模式；點擊下方「🍽️ 開始用餐」才會開啟相機與建立雲端紀錄。</p>
-            </div>
+            <!-- 只在尚未開始用餐時顯示；相機啟動、手動離開全螢幕時都不遮擋影像。 -->
+            <section id="idle-calendar" class="idle-calendar" aria-label="待機日曆、時間與桃園天氣">
+                <p id="idle-greeting" class="idle-greeting" aria-live="off">您好</p>
+                <div class="idle-calendar-main">
+                    <div class="idle-date-page">
+                        <time id="idle-date">日期載入中</time>
+                        <span id="idle-day" class="idle-day" aria-hidden="true">—</span>
+                        <span id="idle-weekday"></span>
+                    </div>
+                    <div class="idle-clock-region">
+                        <span class="idle-clock-label">現在時間</span>
+                        <time id="idle-time" class="idle-clock" aria-label="當下時間" aria-live="off">--:--</time>
+                    </div>
+                </div>
+                <div class="idle-weather-region" aria-label="桃園市區參考天氣">
+                    <div class="idle-weather-heading"><span>今日天氣</span><span id="idle-weather-status" hidden role="status" aria-live="polite">正在取得天氣…</span></div>
+                    <ul class="idle-weather-grid">
+                        <li class="idle-weather-city">
+                            <span class="idle-city-name">桃園</span>
+                            <span id="idle-weather-taoyuan-icon" class="idle-weather-icon" aria-hidden="true">—</span>
+                            <span id="idle-weather-taoyuan-label" class="idle-weather-label">載入中</span>
+                            <span id="idle-weather-taoyuan-tip" class="idle-weather-tip">請稍候</span>
+                        </li>
+                    </ul>
+                </div>
+                <div class="idle-calendar-credit">桃園市區參考　<a href="https://open-meteo.com/" target="_blank" rel="noopener noreferrer">天氣資料來源</a></div>
+            </section>
 
             <!-- MediaPipe 載入提示層 (預設隱藏，不再卡住畫面) -->
             <div id="loading-overlay" class="absolute inset-0 bg-slate-950/90 backdrop-blur hidden flex flex-col items-center justify-center p-6 text-center space-y-3 z-30">
                 <div class="w-10 h-10 border-4 border-blue-500 border-t-transparent rounded-full animate-spin"></div>
-                <h3 class="font-bold text-slate-200 text-sm">正在載入 MediaPipe AI 模型...</h3>
+                <h3 class="font-bold text-slate-200 text-sm">正在載入影像辨識模型…</h3>
                 <p class="text-[11px] text-slate-400">背景下載中，您可以直接開始用餐與開啟相機</p>
             </div>
 
+            <!-- 實時狀態 HUD Overlay (已依需求隱藏，使用者不需看到工程數值) -->
+            <div id="hud-stats-overlay" class="absolute top-3 left-3 bg-slate-900/80 backdrop-blur px-3 py-1.5 rounded-xl border border-slate-700/60 text-[11px] space-y-0.5 z-20 hidden">
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">進食狀態:</span>
+                    <span id="hud-state" class="font-bold text-amber-300">待機</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">辨識模型：</span>
+                    <span id="hud-ai-status" class="font-bold text-amber-400">⏳ 載入中...</span>
+                </div>
 
-            <!-- 畫面中央底部 動態動作狀態 Pill -->
-            <div class="absolute bottom-3 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur px-4 py-1.5 rounded-full border border-slate-700/80 shadow-lg flex items-center space-x-2 z-20">
-                <span class="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse" id="hud-action-dot"></span>
-                <span id="hud-action-state" class="font-bold text-xs text-slate-200">👄 準備用餐中...</span>
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">累積咀嚼:</span>
+                    <span id="hud-chews" class="font-mono font-bold text-emerald-400 text-sm">0 次</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">成功吞嚥:</span>
+                    <span id="hud-swallows" class="font-mono font-bold text-blue-400 text-sm">0 次</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">嘴部開合度：</span>
+                    <span id="hud-mar" class="font-mono text-slate-200">0.00</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">下巴位移變化：</span>
+                    <span id="hud-jaw-std" class="font-mono text-slate-200">0.00</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">下巴速度:</span>
+                    <span id="hud-jaw-vel" class="font-mono text-slate-200">0.00</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">嘴唇藍光比:</span>
+                    <span id="hud-cyanosis" class="font-mono text-emerald-400 font-bold">0.25 (正常)</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">證據融合分:</span>
+                    <span id="hud-fusion-score" class="font-mono text-blue-300 font-bold">0.00 / 1.0</span>
+                </div>
+                <div class="flex items-center space-x-2">
+                    <span class="text-slate-400">緊急累積:</span>
+                    <span id="hud-shake-timer" class="font-mono text-emerald-400 font-bold">0.0 秒／2.5 秒</span>
+                </div>
             </div>
 
-            <!-- 右上角 聲音波形與 AI 咳嗽聽診狀態 HUD -->
-            <div id="hud-mic-pill" class="absolute top-3 right-3 bg-slate-900/80 backdrop-blur px-2.5 py-1.5 rounded-xl border border-slate-700/60 flex items-center space-x-2 transition-colors duration-200">
-                <span id="hud-mic-label" class="text-[10px] text-slate-400">🎤 AI載入中</span>
+
+            <!-- 右上角背景偵測狀態，保留即時音訊指示 -->
+            <div class="absolute top-3 right-3 bg-slate-900/80 backdrop-blur px-2.5 py-1.5 rounded-xl border border-slate-700/60 flex items-center space-x-2">
+                <span id="camera-monitor-status" role="status" aria-live="polite" class="text-[10px] text-slate-400">待機中</span>
                 <div class="w-12 h-2 bg-slate-800 rounded-full overflow-hidden">
                     <div id="hud-mic-bar" class="h-full bg-blue-500 w-0 transition-all duration-75"></div>
                 </div>
@@ -117,72 +423,51 @@
             <!-- 警報跳窗圖層 (Level 1 - Level 4) -->
             <div id="alert-overlay" class="absolute inset-0 hidden flex flex-col items-center justify-center bg-rose-600/90 backdrop-blur-md p-6 text-center z-30 animate-pulse">
                 <span class="text-6xl mb-2 animate-bounce">🚨</span>
-                <h2 id="alert-title" class="text-2xl font-black text-white tracking-wider mb-2">L4 急性哽噎緊急警報</h2>
-                <p id="alert-desc" class="text-sm text-rose-100 mb-6">偵測到急性哽噎高危徵象（拍胸／抓喉＋掙扎、雙手窒息手勢或嗆咳後抓喉），已即時通知遠端照護員！</p>
+                <h2 id="alert-title" class="text-2xl font-black text-white tracking-wider mb-2">第四級哽噎緊急警報</h2>
+                <p id="alert-desc" class="text-sm text-rose-100 mb-6">高敏感度測試路徑達標。請照護者立即人工確認並依現場流程協助。</p>
                 <button onclick="dismissAlertOverlay()" class="bg-white text-rose-900 font-bold px-6 py-2.5 rounded-xl shadow-lg hover:bg-slate-100 transition">
                     解除警報 ✕
                 </button>
             </div>
+
+            <!-- Must stay inside the fullscreen element so it remains clickable. -->
+            <button id="btn-end-meal" type="button" onclick="endMealSession()" hidden disabled class="meal-end-button">
+                <span aria-hidden="true">⏹</span><span>結束用餐</span>
+            </button>
         </div>
 
         <!-- 開始 / 結束 用餐按鈕列 -->
-        <div class="grid grid-cols-2 gap-3">
-            <button id="btn-start-meal" type="button" onclick="startMealSession()" disabled class="bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-3.5 rounded-2xl shadow-lg flex items-center justify-center space-x-2 text-base transition border border-emerald-400 opacity-50 cursor-not-allowed">
+        <div class="grid grid-cols-1 gap-3">
+            <button id="btn-start-meal" onclick="startMealSession()" class="meal-start-button bg-emerald-600 hover:bg-emerald-500 text-white py-3.5 rounded-2xl shadow-lg flex items-center justify-center space-x-2 transition border border-emerald-400">
                 <span>🍽️</span>
                 <span>開始用餐</span>
             </button>
-            <button id="btn-end-meal" type="button" onclick="endMealSession()" disabled class="bg-slate-800 text-slate-500 font-bold py-3.5 rounded-2xl shadow flex items-center justify-center space-x-2 text-base cursor-not-allowed border border-slate-700 transition">
-                <span>⏹️</span>
-                <span>結束用餐</span>
-            </button>
+
         </div>
 
     </main>
 
-    <!-- 底部個案即時評分卡片 -->
-    <footer class="bg-slate-900/90 border-t border-slate-800 p-3 max-w-md w-full mx-auto text-xs text-slate-400 flex items-center justify-between">
-        <div>
-            <span>用餐狀態: </span>
-            <span id="meal-status-text" class="font-bold text-slate-300">尚未登入</span>
-        </div>
-        <div class="flex items-center space-x-2">
-            <button id="btn-footer-cough-records" type="button" onclick="openCoughRecordModal()" disabled class="text-rose-400 hover:text-rose-300 bg-rose-950/40 px-2 py-0.5 rounded border border-rose-800/40 transition flex items-center space-x-1 disabled:opacity-50 disabled:cursor-not-allowed">
-                <span>📋 嗆咳:</span>
-                <span id="footer-cough-count" class="font-bold">0</span>
-                <span>次</span>
-            </button>
-            <span id="risk-badge" class="font-bold text-emerald-400 bg-emerald-500/10 px-2 py-0.5 rounded border border-emerald-500/30">🟢 正常</span>
-        </div>
-    </footer>
-
-    <!-- 個案登入與新增帳號 Modal (預設隱藏，僅於通過照護帳號驗證後顯示該帳號名下之雲端個案) -->
-    <div id="login-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50 hidden">
-        <div class="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-xs w-full shadow-2xl space-y-4 relative">
-            <button id="btn-close-login-modal" type="button" onclick="closeLoginModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white text-sm font-bold p-1 hidden">✕</button>
+    <!-- 個案登入與新增帳號 Modal -->
+    <div id="login-modal" class="fixed inset-0 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4 z-50">
+        <div class="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-xs w-full max-h-[90dvh] overflow-y-auto shadow-2xl space-y-4 relative">
+            <button onclick="closeLoginModal()" class="absolute top-4 right-4 text-slate-400 hover:text-white text-sm font-bold p-1">✕</button>
 
             <!-- 檢視狀態 1: 選擇現有帳號 -->
             <div id="patient-select-view" class="space-y-3">
                 <div class="text-center">
                     <span class="text-4xl">🔑</span>
-                    <h3 class="font-bold text-lg text-slate-100 mt-2">請選擇被照護者</h3>
-                    <p id="patient-list-status" class="text-xs text-slate-400">選擇後將先進入待機模式</p>
+                    <h3 class="font-bold text-lg text-slate-100 mt-2">請選擇被照護者帳號</h3>
+                    <p class="text-xs text-slate-400">載入該個案個人化標準或建立新個案</p>
                 </div>
-
-                <!-- 動態雲端帳號列表容器 (僅通過驗證後渲染，絕不預載預設名單) -->
-                <div id="patient-list-container" class="space-y-2 max-h-52 overflow-y-auto pr-0.5"></div>
-
-                <!-- 🔒 選配：機構防窺單一個案鎖定模式 (居家 A 可不勾選；機構 B 勾選後切換/登出需密碼) -->
-                <label for="chk-kiosk-lock" class="flex items-start space-x-2.5 bg-slate-800/60 hover:bg-slate-800 p-2.5 rounded-2xl border border-slate-700/70 cursor-pointer transition text-left">
-                    <input id="chk-kiosk-lock" type="checkbox" class="mt-0.5 rounded border-slate-600 text-amber-500 focus:ring-amber-500">
-                    <span class="text-[11px] text-slate-300 leading-snug">
-                        <strong class="text-amber-300 block">🔒 鎖定此裝置於所選個案（機構防窺）</strong>
-                        勾選後，切換個案或登出須輸入照護密碼；居家一般使用可免勾選。
-                    </span>
-                </label>
+                
+                <!-- 動態帳號列表容器 -->
+                <div id="patient-list-container" class="space-y-2 max-h-56 overflow-y-auto pr-0.5">
+                    <!-- 由 renderPatientList() 動態生成 -->
+                </div>
 
                 <!-- ➕ 新增帳號按鈕 -->
                 <button type="button" onclick="showAddPatientView()" class="w-full bg-blue-600/20 hover:bg-blue-600/30 text-blue-300 p-3 rounded-2xl font-bold text-sm flex items-center justify-center space-x-2 border border-blue-500/40 transition">
-                    <span>➕ 新增被照護者資料</span>
+                    <span>➕ 新增個案帳號</span>
                 </button>
             </div>
 
@@ -190,13 +475,13 @@
             <div id="patient-add-view" class="space-y-4 hidden">
                 <div class="text-center">
                     <span class="text-4xl">📝</span>
-                    <h3 class="font-bold text-lg text-slate-100 mt-2">新增被照護者資料</h3>
-                    <p class="text-xs text-slate-400">儲存至雲端後將自動進入待機模式</p>
+                    <h3 class="font-bold text-lg text-slate-100 mt-2">新增個案基本資料</h3>
+                    <p class="text-xs text-slate-400">建立後將自動儲存並開始使用</p>
                 </div>
 
                 <div class="space-y-3">
                     <div>
-                        <label class="text-xs font-semibold text-slate-300 block mb-1" for="new-patient-name">姓名 (稱呼) *</label>
+                        <label class="text-xs font-semibold text-slate-300 block mb-1">姓名 (稱呼) *</label>
                         <input type="text" id="new-patient-name" placeholder="例如：張爺爺、王奶奶" class="w-full bg-slate-800 border border-slate-700 rounded-xl px-3 py-2.5 text-sm text-white placeholder-slate-500 focus:outline-none focus:border-blue-500">
                     </div>
 
@@ -213,17 +498,35 @@
                             </label>
                         </div>
                     </div>
+                    <label for="new-patient-local-recording" class="flex items-start gap-3 rounded-2xl border border-blue-900 bg-blue-950/20 p-3 text-left cursor-pointer">
+                        <input id="new-patient-local-recording" type="checkbox" class="mt-1 h-5 w-5 accent-blue-500">
+                        <span class="text-xs leading-relaxed text-slate-200">
+                            <strong class="block text-blue-300">是否要錄影留存？（預設關閉）</strong>
+                            <span>勾選後啟用本機無聲整餐錄影；影片只保存在這台電腦，不會上傳雲端。</span>
+                        </span>
+                    </label>
                 </div>
 
                 <div class="space-y-2 pt-2">
                     <button id="btn-save-new-patient" type="button" onclick="saveAndLoginNewPatient()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold p-3 rounded-2xl text-sm shadow transition">
-                        💾 儲存並進入待機
+                        💾 儲存並開始使用
                     </button>
-                    <button id="btn-back-patient-list" type="button" onclick="showPatientListView()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold p-2.5 rounded-2xl text-xs border border-slate-700 transition">
+                    <button type="button" onclick="showPatientListView()" class="w-full bg-slate-800 hover:bg-slate-700 text-slate-300 font-semibold p-2.5 rounded-2xl text-xs border border-slate-700 transition">
                         ⬅️ 返回選擇列表
                     </button>
                 </div>
             </div>
+            <section id="local-recording-connect-panel" class="rounded-2xl border border-slate-700 bg-slate-900 p-3 space-y-2" aria-label="本機錄影連線">
+                <div class="flex items-center justify-between gap-3">
+                    <div>
+                        <h3 class="text-xs font-bold text-slate-200">本機錄影服務</h3>
+                        <p id="local-recording-connect-status" class="text-[11px] leading-relaxed text-slate-400">影片只保存在錄影電腦；選擇錄影時請連接本機服務。</p>
+                        <label for="local-recording-tunnel-password" class="sr-only">比賽本機連線碼</label>
+                        <input id="local-recording-tunnel-password" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" hidden placeholder="輸入比賽連線碼" class="mt-2 w-full rounded-xl border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 placeholder-slate-500">
+                    </div>
+                    <button id="local-recording-connect" type="button" class="shrink-0 rounded-lg border border-slate-600 bg-slate-800 px-3 py-2 text-[11px] font-semibold text-slate-200">連接本機服務</button>
+                </div>
+            </section>
         </div>
     </div>
 
@@ -235,10 +538,10 @@
                     <span class="text-2xl">📋</span>
                     <div>
                         <h3 class="font-bold text-base text-slate-100">嗆咳事件紀錄</h3>
-                        <p class="text-[11px] text-slate-400" id="cough-modal-patient-info">個案：尚未選擇</p>
+                        <p class="text-[11px] text-slate-400" id="cough-modal-patient-info">個案：未登入</p>
                     </div>
                 </div>
-                <button type="button" onclick="closeCoughRecordModal()" class="text-slate-400 hover:text-white text-base font-bold p-1">✕</button>
+                <button onclick="closeCoughRecordModal()" class="text-slate-400 hover:text-white text-base font-bold p-1">✕</button>
             </div>
 
             <!-- 本次與累計數據 -->
@@ -249,55 +552,42 @@
                     <span class="text-[9px] text-slate-500 block">次</span>
                 </div>
                 <div class="bg-slate-800/60 border border-slate-700/50 p-2.5 rounded-2xl">
-                    <span class="text-[10px] text-slate-400 block">此個案本機紀錄</span>
+                    <span class="text-[10px] text-slate-400 block">歷史紀錄筆數</span>
                     <span id="cough-modal-total-count" class="text-xl font-mono font-black text-amber-400">0</span>
                     <span class="text-[9px] text-slate-500 block">筆事件</span>
                 </div>
             </div>
 
             <!-- 紀錄清單 -->
-            <div id="cough-record-list" class="flex-1 overflow-y-auto space-y-2 pr-1 max-h-64 min-h-[120px]"></div>
+            <div id="cough-record-list" class="flex-1 overflow-y-auto space-y-2 pr-1 max-h-64 min-h-[120px]">
+                <!-- 動態注入 -->
+            </div>
 
             <!-- 底部動作 -->
             <div class="flex items-center justify-between pt-3 border-t border-slate-800 text-xs">
-                <button type="button" onclick="clearAllCoughRecords()" class="text-slate-500 hover:text-rose-400 transition py-1 px-2">
-                    🗑️ 清空此個案紀錄
+                <button onclick="clearAllCoughRecords()" class="text-slate-500 hover:text-rose-400 transition py-1 px-2">
+                    🗑️ 清空紀錄
                 </button>
-                <button type="button" onclick="closeCoughRecordModal()" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-4 py-1.5 rounded-xl transition">
+                <button onclick="closeCoughRecordModal()" class="bg-blue-600 hover:bg-blue-500 text-white font-bold px-4 py-1.5 rounded-xl transition">
                     關閉
                 </button>
             </div>
         </div>
     </div>
 
-    <!-- 🔔 L4 網頁即時推播通知彈窗 (右上角浮動卡片，測試時免收信即可直接看到通知內容) -->
-    <div id="l4-web-notification-toast" role="alert" aria-live="assertive" class="fixed top-4 right-4 z-[60] max-w-sm w-[calc(100%-2rem)] bg-rose-950/95 backdrop-blur-md border-2 border-rose-400 text-white rounded-2xl shadow-2xl p-4 hidden">
-        <div class="flex items-start justify-between gap-3">
-            <div class="flex items-center gap-2">
-                <span class="text-2xl animate-bounce">🚨</span>
-                <div>
-                    <div class="flex items-center gap-2">
-                        <span class="bg-rose-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">L4 緊急通知</span>
-                        <span id="l4-web-notification-time" class="text-[11px] font-mono text-rose-200">--:--:--</span>
-                    </div>
-                    <h4 id="l4-web-notification-title" class="font-black text-sm text-white mt-0.5">L4 進食安全提醒（急性哽噎）</h4>
-                </div>
-            </div>
-            <button type="button" onclick="dismissL4WebNotificationToast()" class="text-rose-200 hover:text-white font-bold text-sm px-1.5 py-0.5 rounded-lg hover:bg-rose-800/60 transition" aria-label="關閉通知">✕</button>
-        </div>
-        <p id="l4-web-notification-body" class="text-xs text-rose-100 leading-relaxed mt-2.5 bg-rose-900/60 p-2.5 rounded-xl border border-rose-700/60">
-            系統偵測到 L4 急性哽噎緊急事件，請立即查看個案狀況！
-        </p>
-        <div class="mt-2.5 flex items-center justify-between text-[11px] text-rose-200">
-            <span id="l4-web-notification-status">🔔 網頁即時通知已跳出（同步觸發 Gmail 通知）</span>
-            <button type="button" onclick="dismissL4WebNotificationToast()" class="bg-white text-rose-900 font-bold px-3 py-1 rounded-lg text-xs shadow hover:bg-rose-50 transition">知道了</button>
-        </div>
-    </div>
-
-    <script src="../local_recording/meal-recording.js?v=localrec-1"></script>
-    <script src="../local_recording/local-recording-ui.js?v=localrec-1"></script>
-    <script src="../local_recording/local-recording-panel.js?v=localrec-1"></script>
-    <script src="../local_recording/bridge.js?v=localrec-1"></script>
-    <script src="ui-refresh.js"></script>
+    <!-- 🎯 頁面初始化與事件綁定 -->
+    <script>
+        (function() {
+            // 初始化帳號列表與嗆咳徽章
+            if (typeof renderPatientList === 'function') renderPatientList();
+            if (typeof updateCoughBadge === 'function') updateCoughBadge();
+        })();
+    </script>
+    <script src="idle-calendar.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="../local_recording/meal-recording.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="../local_recording/local-recording-ui.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="../local_recording/local-recording-panel.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="local-recording-tunnel-config.js?v=desktop-d8d200776db6"></script>
+    <script src="../local_recording/bridge.js?v=desktop-e67ac1e9f6f9"></script>
 </body>
 </html>

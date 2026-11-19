@@ -1,48 +1,41 @@
 <!DOCTYPE html>
-<html lang="zh-TW" class="dark" data-ui-theme="milktea">
+<html lang="zh-TW" data-theme="milk-tea">
 <head>
     <meta charset="UTF-8">
+    <meta name="theme-color" content="#f7f1e8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>防哽咽 AI 照護儀表板 —— 遠端即時監看與數據分析</title>
+    <title>防哽咽人工智慧照護儀表板——遠端即時監看與數據分析</title>
     <!-- Tailwind CSS CDN -->
     <script src="https://cdn.tailwindcss.com"></script>
     <!-- Supabase JS Client -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <!-- Chart.js CDN -->
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-    <link rel="stylesheet" href="style.css">
-    <link rel="stylesheet" href="ui-refresh.css?v=20261115_9aadfbf">
+    <link rel="stylesheet" href="style.css?v=desktop-e67ac1e9f6f9">
 </head>
 <body class="bg-slate-950 text-slate-100 font-sans min-h-screen flex flex-col">
 
     <!-- Header 導覽條 -->
-    <header class="bg-slate-900 border-b border-slate-800 px-6 py-3.5 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+    <header class="bg-slate-900 border-b border-slate-800 px-6 py-3.5 flex flex-wrap items-center justify-between gap-4">
         <div class="flex items-center space-x-3">
             <span class="text-3xl">🖥️</span>
             <div>
-                <h1 class="font-bold text-lg text-blue-400">防哽咽 AI 遠端照護大儀表板</h1>
-                <p class="text-xs text-slate-400">即時 WebRTC 低延遲串流 · 4階動態異常監控 · 個案歷史趨勢分析</p>
+                <h1 class="font-bold text-lg text-blue-400">防哽咽人工智慧遠端照護儀表板</h1>
+                <p class="text-xs text-slate-400">即時影音連線・四級異常監看・個案歷史趨勢分析</p>
             </div>
         </div>
         
-        <div class="flex flex-wrap items-center gap-2">
-            <div class="flex items-center space-x-2 bg-slate-800/80 px-3 py-1.5 rounded-xl border border-slate-700">
-                <span class="w-2.5 h-2.5 rounded-full bg-slate-500" id="rt-status-dot"></span>
-                <span class="text-xs font-semibold text-slate-300" id="rt-status-text">尚未登入</span>
-            </div>
-            <div class="flex flex-wrap items-center gap-2">
-                <label class="sr-only" for="caregiver-patient-select">選擇監看個案</label>
-                <select id="caregiver-patient-select" disabled
-                    class="w-44 max-w-[38vw] rounded-lg border border-slate-700 bg-slate-950 px-2 py-1.5 text-xs text-slate-100">
-                    <option value="">載入個案名單…</option>
-                </select>
-                <button id="btn-refresh-patients" type="button" aria-label="更新個案名單"
-                    class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 px-2.5 py-1.5 rounded-xl border border-slate-700">更新名單</button>
-                <button id="btn-connect-patient" type="button" disabled
-                    class="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-xl font-bold disabled:opacity-50">切換個案</button>
-                <span id="caregiver-patient-list-status" class="sr-only" aria-live="polite"></span>
+        <div id="caregiver-header-controls" class="flex flex-wrap items-center justify-end gap-3">
+            <div id="caregiver-patient-selector" role="group" aria-label="個案選取" class="inline-flex shrink-0">
+                <input id="caregiver-patient-code" type="hidden" value="P001" maxlength="32">
+                <button id="btn-connect-patient" type="button" onclick="connectToPatient()"
+                    class="text-xs bg-blue-600 hover:bg-blue-500 text-white px-3 py-1.5 rounded-xl border border-transparent font-bold whitespace-nowrap">連線個案</button>
             </div>
             
+            <a id="btn-return-camera" href="index.html" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-xl border border-slate-700 inline-flex items-center gap-1.5 whitespace-nowrap transition">
+                <span aria-hidden="true">📷</span><span>回到個案鏡頭</span>
+            </a>
+
             <button onclick="toggleAudioMute()" id="btn-toggle-sound" class="text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-xl border border-slate-700 flex items-center space-x-1 transition">
                 <span id="sound-icon">🔊</span>
                 <span id="sound-text">警報音效: 開啟</span>
@@ -50,136 +43,117 @@
         </div>
     </header>
 
-    <section id="ui-refresh-controls" class="ui-refresh-toolbar ui-refresh-toolbar--caregiver" aria-label="儀表板時間與字體設定">
-        <div class="ui-refresh-clock" aria-live="polite">
-            <p id="dashboard-greeting" class="ui-refresh-greeting">照護狀態總覽</p>
-            <div class="ui-refresh-date-line">
-                <time id="dashboard-date" datetime="">日期</time>
-                <span id="dashboard-weekday">星期</span>
-                <time id="dashboard-time" class="ui-refresh-time" datetime="">--:--</time>
-            </div>
-        </div>
-        <div class="ui-refresh-font-controls" aria-label="字體大小調整">
-            <span class="ui-refresh-font-label">字體</span>
-            <button id="ui-font-decrease" type="button" aria-label="縮小字體">A−</button>
-            <output id="ui-font-percent" class="ui-refresh-font-value" aria-live="polite">100%</output>
-            <button id="ui-font-increase" type="button" aria-label="放大字體">A＋</button>
-        </div>
-    </section>
-
     <!-- 主要 Dashboard 內容網格 -->
     <main class="flex-1 p-6 max-w-7xl w-full mx-auto grid grid-cols-1 lg:grid-cols-12 gap-6">
 
-        <!-- 左側區塊：WebRTC 即時影音監看與 HUD (佔 7 欄) -->
-        <section class="lg:col-span-7 flex flex-col space-y-4">
-            
+        <!-- 左側：即時事件紀錄 -->
+        <section id="caregiver-events-column" class="lg:col-span-7 flex flex-col space-y-4">
+            <!-- 實時警報與異常事件串流列表 -->
+            <div id="caregiver-events-panel" class="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg flex-1 flex flex-col">
+                <div class="flex items-center justify-between gap-3 mb-2">
+                    <h3 class="font-bold text-base text-slate-100 flex items-center space-x-2">
+                        <span>⚡</span>
+                        <span>即時事件紀錄</span>
+                    </h3>
+                    <button id="btn-refresh-anomaly-history" type="button" class="shrink-0 text-xs bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-1.5 rounded-xl border border-slate-700">重新載入</button>
+                </div>
+                <p id="caregiver-anomaly-history-status" role="status" aria-live="polite" class="text-xs text-slate-400 mb-3">選擇個案並連線後載入近 7 餐已儲存事件。</p>
+                <div class="flex-1 overflow-y-auto max-h-64 space-y-2 pr-1" id="realtime-log-container">
+                    <div class="text-center py-8 text-xs text-slate-500 italic" id="empty-log-msg">
+                        目前尚無即時或已儲存異常事件紀錄
+                    </div>
+                    <div id="caregiver-anomaly-history-list" class="space-y-2"></div>
+                </div>
+            </div>
+
+        </section>
+
+        <!-- 右側：相機連線、嗆咳事件與基準校正 -->
+        <section id="caregiver-camera-column" class="lg:col-span-5 flex flex-col space-y-4">
             <!-- 視訊播放器視窗 -->
-            <div class="relative w-full aspect-video bg-black rounded-3xl overflow-hidden border-2 border-slate-800 shadow-2xl flex items-center justify-center">
+            <div id="caregiver-camera-panel" class="relative w-full aspect-video bg-black rounded-3xl overflow-hidden border-2 border-slate-800 shadow-2xl flex items-center justify-center">
                 <!-- 遠端 WebRTC 視訊標籤 -->
                 <video id="remote-video" autoplay playsinline class="w-full h-full object-cover"></video>
 
                 <!-- 無訊號提示層 -->
                 <div id="no-stream-placeholder" class="absolute inset-0 bg-slate-900/90 backdrop-blur flex flex-col items-center justify-center p-6 text-center space-y-3 z-10">
                     <span class="text-5xl animate-bounce">📡</span>
-                    <h3 class="font-bold text-slate-200 text-lg">等待個案端開啟相機連線...</h3>
-                    <p class="text-xs text-slate-400 max-w-xs">請確保個案已在手機端登入並按下「開始用餐」，WebRTC 影音串流將自動連結。</p>
+                    <h3 class="font-bold text-slate-200 text-lg">等待個案端開啟相機連線…</h3>
+                    <p class="text-xs text-slate-400 max-w-xs">請先在個案端登入並按下「開始用餐」，系統會自動建立影音連線。</p>
                 </div>
 
                 <!-- 現場 HUD 狀態 -->
                 <div class="absolute top-4 left-4 bg-slate-900/80 backdrop-blur px-4 py-2 rounded-2xl border border-slate-700/60 text-xs space-y-1 z-20">
                     <div class="flex items-center space-x-2">
-                        <span class="text-slate-400">當前監看個案:</span>
-                        <span id="caregiver-patient-name" class="font-bold text-blue-400">尚未選擇個案</span>
+                        <span class="text-slate-400">目前監看個案：</span>
+                        <span id="caregiver-patient-name" class="font-bold text-blue-400">王爺爺 (P001)</span>
                     </div>
                     <div class="flex items-center space-x-2">
-                        <span class="text-slate-400">當前餐食質地:</span>
-                        <span id="caregiver-diet-type" class="font-bold text-emerald-400">-</span>
+                        <span class="text-slate-400">目前餐食質地：</span>
+                        <span id="caregiver-diet-type" class="font-bold text-emerald-400">軟食餐盒</span>
                     </div>
                 </div>
 
                 <!-- 警報亮燈視窗 -->
                 <div id="caregiver-alert-banner" class="absolute top-4 right-4 bg-rose-600 text-white font-bold text-xs px-4 py-2 rounded-2xl border border-rose-400 shadow-lg hidden flex items-center space-x-2 animate-bounce z-20">
                     <span>🚨</span>
-                    <span id="caregiver-alert-text">觸發 Level 4 急性哽噎緊急警報！</span>
+                    <span id="caregiver-alert-text">觸發第四級哽噎緊急警報！</span>
                 </div>
             </div>
 
-            <!-- 即時咳嗽事件統計 -->
-            <div class="flex justify-center">
-                <div class="bg-slate-900 border border-slate-800 p-3 rounded-2xl w-full max-w-xs text-center">
-                    <span class="text-[10px] text-slate-400 block">咳嗽事件</span>
+            <!-- 即時數據卡片網格 -->
+            <div id="caregiver-cough-panel" class="grid grid-cols-1 gap-2.5">
+
+
+
+
+                <div class="bg-slate-900 border border-slate-800 p-3 rounded-2xl">
+                    <span class="text-[10px] text-slate-400 block">嗆咳事件</span>
                     <span id="stat-coughs" class="text-xl font-black font-mono text-rose-400">0</span>
                     <span class="text-[9px] text-slate-500 block">次</span>
                 </div>
             </div>
 
-        </section>
-
-        <!-- 右側區塊：個案動態基準校正與實時警報事件 (佔 5 欄) -->
-        <section class="lg:col-span-5 flex flex-col space-y-4">
-            
             <!-- 個人化動態校正面板 -->
-            <div class="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-3">
+            <div id="caregiver-baseline-panel" class="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-3">
                 <div class="flex items-center justify-between border-b border-slate-800 pb-3">
                     <h3 class="font-bold text-base text-slate-100 flex items-center space-x-2">
                         <span>🎯</span>
                         <span>個人化動態基準校正面板</span>
                     </h3>
-                    <span class="text-[10px] bg-blue-500/10 text-blue-400 px-2 py-0.5 rounded border border-blue-500/20">咀嚼基準自適應</span>
+                    <span class="text-[10px] bg-blue-500/10 text-blue-400 px-2 py-0.5 rounded border border-blue-500/20">3餐自適應學習</span>
                 </div>
 
                 <div class="space-y-2 text-xs">
                     <div class="flex justify-between items-center bg-slate-800/50 p-2.5 rounded-xl border border-slate-700/50">
-                        <span class="text-slate-400">平均單次咀嚼時間基線:</span>
+                        <span class="text-slate-400">平均單次咀嚼時間基線：</span>
                         <span id="base-chew-sec" class="font-mono font-bold text-emerald-400">0.85 秒</span>
                     </div>
                     <div class="flex justify-between items-center bg-slate-800/50 p-2.5 rounded-xl border border-slate-700/50">
-                        <span class="text-slate-400">吞嚥停頓參考基準（每餐趨勢暫緩）:</span>
+                        <span class="text-slate-400">平均吞嚥停頓時間基線：</span>
                         <span id="base-swallow-sec" class="font-mono font-bold text-emerald-400">1.10 秒</span>
                     </div>
                 </div>
 
                 <div class="text-[11px] text-slate-500 italic bg-slate-950 p-2.5 rounded-xl border border-slate-800">
-                    💡 說明：第 4 餐起依個案歷史更新咀嚼基準；吞嚥停頓目前僅顯示設定參考，尚未納入每餐趨勢。
+                    💡 說明：前3餐套用臨床通用標準。系統將於個案完成第4餐起，自動根據個人歷史平均值 (μ ± σ) 更新其專屬基準。
                 </div>
             </div>
 
-            <!-- 實時警報與異常事件串流列表 -->
-            <div class="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg flex-1 flex flex-col">
-                <h3 class="font-bold text-base text-slate-100 flex items-center space-x-2 mb-3">
-                    <span>⚡</span>
-                    <span>即時異常事件日誌 (Realtime Logs)</span>
-                </h3>
-
-                <div class="flex-1 overflow-y-auto max-h-64 space-y-2 pr-1" id="realtime-log-container">
-                    <div class="text-center py-8 text-xs text-slate-500 italic" id="empty-log-msg">
-                        目前尚無異常事件紀錄
-                    </div>
-                </div>
-            </div>
 
         </section>
 
         <!-- 底部全寬區塊：歷史用餐場次與趨勢圖表 (佔 12 欄) -->
         <section class="lg:col-span-12 bg-slate-900 border border-slate-800 rounded-3xl p-6 shadow-xl space-y-4">
-            <div class="flex flex-wrap items-center justify-between gap-3">
-                <h3 class="font-bold text-lg text-slate-100 flex items-center space-x-2">
-                    <span>📈</span>
-                    <span>每餐紀錄與個案趨勢</span>
-                </h3>
-                <label class="flex items-center gap-2 text-xs text-slate-300" for="caregiver-history-range">
-                    歷史範圍
-                    <select id="caregiver-history-range" disabled class="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100">
-                        <option value="recent7">最近 7 餐</option>
-                        <option value="30days">近 30 天</option>
-                    </select>
-                </label>
-            </div>
+            <h3 class="font-bold text-lg text-slate-100 flex items-center space-x-2">
+                <span>📈</span>
+                <span>個案歷史用餐品質與嗆咳趨勢分析</span>
+            </h3>
 
-            <div class="grid grid-cols-1 xl:grid-cols-2 gap-6">
-                <!-- 咳嗽、分級警報與畫面遮蔽事件統計 -->
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- 嗆咳與發呆次數統計圖表 -->
                 <div class="bg-slate-950 p-4 rounded-2xl border border-slate-800">
-                    <h4 class="text-xs font-semibold text-slate-400 mb-3">咳嗽與警報事件（分類分開）</h4>
+                    <h4 class="text-xs font-semibold text-slate-400 mb-3">近7次用餐異常事件頻率</h4>
                     <div class="h-48 relative">
                         <canvas id="chart-anomalies"></canvas>
                     </div>
@@ -187,78 +161,68 @@
 
                 <!-- 咀嚼速度趨勢圖表 -->
                 <div class="bg-slate-950 p-4 rounded-2xl border border-slate-800">
-                    <h4 class="text-xs font-semibold text-slate-400 mb-3">每餐平均咀嚼時間（對照個案基準）</h4>
+                    <h4 class="text-xs font-semibold text-slate-400 mb-3">平均咀嚼耗時變化趨勢（與基線比較）</h4>
                     <div class="h-48 relative">
                         <canvas id="chart-chew-trend"></canvas>
                     </div>
                 </div>
             </div>
-
-            <div class="space-y-2">
-                <p id="meal-history-status" class="text-xs text-slate-400" aria-live="polite">等待用餐紀錄…</p>
-                <div id="meal-history-list" class="space-y-2" aria-live="polite"></div>
-            </div>
         </section>
+
+        <details id="caregiver-advanced-tools" class="advanced-tools advanced-tools--wide lg:col-span-12" aria-label="影片與歷史紀錄">
+            <summary>本機影片與歷史紀錄</summary>
+            <div class="advanced-tools-content">
+                <section id="local-recording-panel" class="bg-slate-900 border border-slate-800 rounded-3xl p-5 shadow-lg space-y-3" aria-labelledby="local-recording-heading">
+                    <div class="flex items-center justify-between gap-3">
+                        <div>
+                            <h3 id="local-recording-heading" class="font-bold text-base text-slate-100">本機整餐影片</h3>
+                            <p class="text-xs text-slate-400">影片僅供本機回看；不會上傳或建立雲端影片儲存。</p>
+                        </div>
+                        <button id="local-recordings-refresh" type="button" class="rounded-xl border border-slate-700 bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200">重新整理</button>
+                    </div>
+                    <label for="local-recording-consent-toggle" class="flex items-start gap-3 rounded-2xl border border-slate-700 bg-slate-950 p-3 text-xs text-slate-200">
+                        <input id="local-recording-consent-toggle" type="checkbox" disabled class="mt-1 h-5 w-5 accent-blue-500">
+                        <span>此個案同意在錄影電腦進行無聲整餐錄影；取消同意會停止新錄影，不會自動刪除舊影片。</span>
+                    </label>
+                    <div id="local-recording-list" class="grid grid-cols-1 gap-3"></div>
+                    <p id="local-recording-empty" class="rounded-xl border border-slate-800 bg-slate-950 p-4 text-xs text-slate-400">請先選取個案並連接本機服務。</p>
+                    <div class="border-t border-slate-800 pt-3 space-y-2">
+                        <h4 id="local-recording-player-title" class="font-semibold text-sm text-slate-200"></h4>
+                        <video id="local-recording-player" class="w-full max-h-[60vh] rounded-2xl bg-black" controls playsinline muted preload="metadata" hidden></video>
+                        <div id="local-recording-marks" class="flex flex-wrap gap-2"></div>
+                    </div>
+                </section>
+            </div>
+        </details>
 
     </main>
 
-    <section id="local-recording-panel" class="ui-recording-panel" aria-labelledby="local-recording-heading">
-        <div class="ui-recording-panel-card">
-            <div class="ui-recording-panel-header">
-                <div>
-                    <h2 id="local-recording-heading">本機整餐影片</h2>
-                    <p>僅保存無聲影片；嗆咳標記可回看事件前 10 秒。關閉同意不會刪除既有影片。</p>
-                </div>
-                <button id="local-recordings-refresh" type="button" class="ui-recording-secondary-button">重新整理影片</button>
-            </div>
-            <p id="local-recording-panel-status" role="status" aria-live="polite" class="ui-recording-status" hidden></p>
-            <label for="local-recording-consent-toggle" class="ui-recording-consent">
-                <input id="local-recording-consent-toggle" type="checkbox" disabled>
-                <span><strong>此個案同意在這台電腦進行整餐無聲錄影</strong><br>同意狀態只留在本機。</span>
-            </label>
-            <div id="local-recording-list" class="ui-recording-list"></div>
-            <p id="local-recording-empty" class="ui-recording-empty">請先選取個案並連接本機服務。</p>
-            <div class="ui-recording-player-area">
-                <h3 id="local-recording-player-title"></h3>
-                <video id="local-recording-player" controls playsinline muted preload="metadata" hidden></video>
-                <div id="local-recording-marks" class="ui-recording-marks"></div>
-            </div>
-        </div>
-    </section>
-
-    <!-- 🔔 L4 網頁即時推播通知彈窗 (右上角浮動卡片，測試時免收信即可直接看到通知內容) -->
-    <div id="l4-web-notification-toast" role="alert" aria-live="assertive" class="fixed top-4 right-4 z-[60] max-w-sm w-[calc(100%-2rem)] bg-rose-950/95 backdrop-blur-md border-2 border-rose-400 text-white rounded-2xl shadow-2xl p-4 hidden">
-        <div class="flex items-start justify-between gap-3">
-            <div class="flex items-center gap-2">
-                <span class="text-2xl animate-bounce">🚨</span>
-                <div>
-                    <div class="flex items-center gap-2">
-                        <span class="bg-rose-600 text-white text-[10px] font-black px-2 py-0.5 rounded-full">L4 緊急通知</span>
-                        <span id="l4-web-notification-time" class="text-[11px] font-mono text-rose-200">--:--:--</span>
-                    </div>
-                    <h4 id="l4-web-notification-title" class="font-black text-sm text-white mt-0.5">L4 進食安全提醒（急性哽噎）</h4>
-                </div>
-            </div>
-            <button type="button" onclick="dismissL4WebNotificationToast()" class="text-rose-200 hover:text-white font-bold text-sm px-1.5 py-0.5 rounded-lg hover:bg-rose-800/60 transition" aria-label="關閉通知">✕</button>
-        </div>
-        <p id="l4-web-notification-body" class="text-xs text-rose-100 leading-relaxed mt-2.5 bg-rose-900/60 p-2.5 rounded-xl border border-rose-700/60">
-            系統偵測到 L4 急性哽噎緊急事件，請立即查看個案狀況！
-        </p>
-        <div class="mt-2.5 flex items-center justify-between text-[11px] text-rose-200">
-            <span id="l4-web-notification-status">🔔 網頁即時通知已跳出（同步觸發 Gmail 通知）</span>
-            <button type="button" onclick="dismissL4WebNotificationToast()" class="bg-white text-rose-900 font-bold px-3 py-1 rounded-lg text-xs shadow hover:bg-rose-50 transition">知道了</button>
+    <!-- L3/L4 緊急彈跳通知；需由照護者確認後才停止警報聲 -->
+    <div id="caregiver-emergency-popup"
+        class="fixed inset-0 z-[100] hidden flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4"
+        role="alertdialog" aria-modal="true" aria-labelledby="caregiver-emergency-title" aria-describedby="caregiver-emergency-text">
+        <div class="w-full max-w-lg rounded-3xl border-2 border-rose-400 bg-slate-900 p-7 text-center shadow-2xl shadow-rose-950/60">
+            <span class="text-5xl" aria-hidden="true">🚨</span>
+            <h2 id="caregiver-emergency-title" class="mt-4 text-2xl font-black text-rose-300">緊急警報</h2>
+            <p id="caregiver-emergency-text" class="mt-3 text-base leading-relaxed text-white">請立即確認個案狀況。</p>
+            <button id="caregiver-alert-ack" type="button" onclick="acknowledgeCaregiverAlert()"
+                class="mt-6 w-full rounded-2xl bg-rose-600 px-5 py-4 text-lg font-black text-white shadow-lg hover:bg-rose-500 focus:outline-none focus:ring-4 focus:ring-rose-300">
+                我已確認，停止警報聲
+            </button>
+            <p class="mt-3 text-xs text-slate-400">確認只會停止照護端警報聲；個案端警報狀態仍會保留至解除。</p>
         </div>
     </div>
 
     <!-- 腳本引用 -->
-    <script src="config.js?v=20261116_c4e91a2"></script>
-    <script src="connection-core.js?v=20261116_c4e91a2"></script>
-    <script src="auth-ui.js?v=20261116_c4e91a2"></script>
-    <script src="caregiver.js?v=20261116_c4e91a2"></script>
-    <script src="../local_recording/meal-recording.js?v=localrec-1"></script>
-    <script src="../local_recording/local-recording-ui.js?v=localrec-1"></script>
-    <script src="../local_recording/local-recording-panel.js?v=localrec-1"></script>
-    <script src="../local_recording/bridge.js?v=localrec-1"></script>
-    <script src="ui-refresh.js"></script>
+    <script src="config.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="connection-core.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="ui-font-size.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="auth-ui.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="caregiver.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="../local_recording/meal-recording.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="../local_recording/local-recording-ui.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="../local_recording/local-recording-panel.js?v=desktop-e67ac1e9f6f9"></script>
+    <script src="local-recording-tunnel-config.js?v=desktop-d8d200776db6"></script>
+    <script src="../local_recording/bridge.js?v=desktop-e67ac1e9f6f9"></script>
 </body>
 </html>

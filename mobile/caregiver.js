@@ -7,13 +7,10 @@ let supabaseClient = null;
 let currentPatientCode = null;
 let currentPatientProfileId = null;
 let caregiverClientId = null;
-let caregiverSessionGeneration = 0;
-let patientSwitchInProgress = false;
 let peerConnection = null;
 let supabaseChannel = null;
 let lastOfferRequestAt = 0;
 let lastLoggedAlertLevel = null;
-let lastLoggedAlertMessage = null;
 let activeNegotiationId = null;
 let currentAnswerPayload = null;
 const remoteCandidateBuffer = window.ConnectionCore.createCandidateBuffer();
@@ -21,45 +18,38 @@ const negotiationGate = window.ConnectionCore.createNegotiationGate();
 let audioMuted = false;
 let audioCtx = null;
 let buzzerInterval = null;
+let activeCaregiverAlertLevel = null;
+let pendingCaregiverAlertLevel = null;
+let caregiverAlertAcknowledged = false;
 
 // Chart.js 實例變數
 let anomaliesChart = null;
 let chewTrendChart = null;
-let currentPatientBaselines = { chew: 0.85 };
-let currentHistoryRange = 'recent7';
-let historyRequestGeneration = 0;
 
 document.addEventListener('DOMContentLoaded', async () => {
+    document.addEventListener('click', unlockAlertAudio, { once: true, capture: true });
     initSupabase();
     if (!supabaseClient) {
-        setRealtimeStatus('Supabase 設定未完成', false);
+        setRealtimeStatus('連線服務尚未設定', false);
         window.AuthUI.showSetupError('系統連線設定尚未完成。請聯絡管理者，不會顯示示範資料或未授權資料。');
         return;
     }
     try {
         await window.AuthUI.requireAuth(supabaseClient, '照護者端');
         initCharts();
-        const historyRangeSelect = document.getElementById('caregiver-history-range');
-        historyRangeSelect?.addEventListener('change', async () => {
-            currentHistoryRange = historyRangeSelect.value === '30days' ? '30days' : 'recent7';
-            if (currentPatientCode && currentPatientProfileId) {
-                await fetchHistoricalSessions(currentPatientCode, currentPatientProfileId,
-                    caregiverSessionGeneration, currentHistoryRange);
+        const codeInput = document.getElementById('caregiver-patient-code');
+        document.getElementById('btn-refresh-anomaly-history')?.addEventListener('click', () => {
+            if (currentPatientProfileId) {
+                void fetchHistoricalSessions(currentPatientCode, currentPatientProfileId);
+            } else {
+                const status = document.getElementById('caregiver-anomaly-history-status');
+                if (status) status.textContent = '請先連線個案，再重新載入已儲存異常紀錄。';
             }
         });
-        const initialCode = new URLSearchParams(location.search).get('patient') || 'P001';
+        const initialCode = new URLSearchParams(location.search).get('patient') || (codeInput && codeInput.value) || 'P001';
+        if (codeInput) codeInput.value = initialCode;
         document.getElementById('btn-connect-patient')?.addEventListener('click', () => connectToPatient());
-        document.getElementById('btn-refresh-patients')?.addEventListener('click', async () => {
-            const select = document.getElementById('caregiver-patient-select');
-            await loadCaregiverProfiles(select?.value || currentPatientCode || initialCode);
-        });
-        const profiles = await loadCaregiverProfiles(initialCode);
-        const selectedCode = document.getElementById('caregiver-patient-select')?.value;
-        if (profiles.length && selectedCode) {
-            await connectToPatient(selectedCode, { quiet: true });
-        } else {
-            setRealtimeStatus('此帳號尚無可選個案', false);
-        }
+        await connectToPatient(initialCode, { quiet: true });
     } catch (error) {
         console.error('[Caregiver] Startup failed:', error);
         setRealtimeStatus('登入／連線失敗', false);
@@ -91,179 +81,67 @@ function setRealtimeStatus(text, connected) {
     }
 }
 
-function setPatientListStatus(text) {
-    const status = document.getElementById('caregiver-patient-list-status');
-    if (status) status.textContent = text;
-}
-
-async function loadCaregiverProfiles(preferredCode = '') {
-    const select = document.getElementById('caregiver-patient-select');
-    const connectButton = document.getElementById('btn-connect-patient');
-    const refreshButton = document.getElementById('btn-refresh-patients');
-    if (!select || !supabaseClient) return [];
-
-    select.disabled = true;
-    if (connectButton) connectButton.disabled = true;
-    if (refreshButton) refreshButton.disabled = true;
-    let hasProfiles = false;
-    try {
-        // RLS limits this authenticated query to profiles owned by the signed-in account.
-        const { data, error } = await supabaseClient
-            .from('patient_profiles')
-            .select('id, patient_code, full_name')
-            .order('full_name', { ascending: true });
-        if (error) throw error;
-
-        const profiles = Array.isArray(data) ? data.filter(profile =>
-            profile && /^[A-Za-z0-9_-]{1,32}$/.test(String(profile.patient_code || ''))
-        ) : [];
-        select.replaceChildren();
-        if (!profiles.length) {
-            const option = document.createElement('option');
-            option.value = '';
-            option.textContent = '此帳號尚無個案';
-            select.appendChild(option);
-            setPatientListStatus('請先在使用者端建立個案資料。');
-            return [];
-        }
-
-        for (const profile of profiles) {
-            const option = document.createElement('option');
-            option.value = profile.patient_code;
-            option.textContent = `${profile.full_name || profile.patient_code} (${profile.patient_code})`;
-            select.appendChild(option);
-        }
-
-        const requestedCode = String(preferredCode || '').trim();
-        const selectedProfile = profiles.find(profile => profile.patient_code === requestedCode)
-            || profiles.find(profile => profile.patient_code === currentPatientCode)
-            || profiles[0];
-        select.value = selectedProfile.patient_code;
-        setPatientListStatus(`已載入 ${profiles.length} 位個案`);
-        hasProfiles = true;
-        return profiles;
-    } catch (error) {
-        console.error('[Caregiver] Could not load patient list:', error);
-        select.replaceChildren();
-        const option = document.createElement('option');
-        option.value = '';
-        option.textContent = '無法載入個案名單';
-        select.appendChild(option);
-        setPatientListStatus('個案名單載入失敗，請重新整理或重新登入。');
-        return [];
-    } finally {
-        select.disabled = !hasProfiles;
-        if (connectButton) connectButton.disabled = !hasProfiles;
-        if (refreshButton) refreshButton.disabled = false;
+function resetPatientEventHistory() {
+    const container = document.getElementById('realtime-log-container');
+    const historyList = document.getElementById('caregiver-anomaly-history-list');
+    const status = document.getElementById('caregiver-anomaly-history-status');
+    if (historyList) historyList.replaceChildren();
+    if (container && historyList) {
+        const empty = document.createElement('div');
+        empty.id = 'empty-log-msg';
+        empty.className = 'text-center py-8 text-xs text-slate-500 italic';
+        empty.textContent = '正在載入所選個案的異常紀錄…';
+        container.replaceChildren(empty, historyList);
     }
-}
-
-function resetCaregiverPatientView() {
-    const defaults = {
-        'caregiver-patient-name': '尚未選擇個案',
-        'caregiver-diet-type': '-',
-        'base-chew-sec': '-',
-        'base-swallow-sec': '-',
-        'stat-chews': '0',
-        'stat-swallows': '0',
-        'stat-jaw-vel': '0.00',
-        'stat-pouching': '0',
-        'stat-coughs': '0'
-    };
-    for (const [id, value] of Object.entries(defaults)) {
-        const element = document.getElementById(id);
-        if (element) element.innerText = value;
-    }
-
-    const remoteVideo = document.getElementById('remote-video');
-    if (remoteVideo) {
-        remoteVideo.pause();
-        remoteVideo.srcObject = null;
-    }
-    document.getElementById('no-stream-placeholder')?.classList.remove('hidden');
-    hideCaregiverAlert();
+    if (status) status.textContent = '正在載入所選個案的已儲存事件…';
     lastLoggedAlertLevel = null;
-    lastLoggedAlertMessage = null;
-
-    const logContainer = document.getElementById('realtime-log-container');
-    if (logContainer) {
-        const emptyMessage = document.createElement('div');
-        emptyMessage.id = 'empty-log-msg';
-        emptyMessage.className = 'text-center py-8 text-xs text-slate-500 italic';
-        emptyMessage.textContent = '目前尚無異常事件紀錄';
-        logContainer.replaceChildren(emptyMessage);
-    }
-    historyRequestGeneration += 1;
-    currentPatientBaselines = { chew: 0.85 };
-    const historyRangeSelect = document.getElementById('caregiver-history-range');
-    if (historyRangeSelect) historyRangeSelect.disabled = true;
-    setMealHistoryStatus('尚未選擇個案');
-    renderMealHistory([], currentHistoryRange);
-    if (anomaliesChart && chewTrendChart) updateCharts([]);
 }
 
-async function connectToPatient(code = document.getElementById('caregiver-patient-select')?.value, options = {}) {
-    if (patientSwitchInProgress) return false;
-    patientSwitchInProgress = true;
-    const generation = ++caregiverSessionGeneration;
+async function connectToPatient(code = document.getElementById('caregiver-patient-code')?.value, options = {}) {
     const normalizedCode = String(code || '').trim();
     const button = document.getElementById('btn-connect-patient');
-    const select = document.getElementById('caregiver-patient-select');
-    const refreshButton = document.getElementById('btn-refresh-patients');
     try {
         if (!supabaseClient || !window.ConnectionCore) throw new Error('連線設定未完成。');
         if (!/^[A-Za-z0-9_-]{1,32}$/.test(normalizedCode)) throw new Error('個案代碼格式錯誤。');
-        if (button) button.disabled = true;
-        if (select) select.disabled = true;
-        if (refreshButton) refreshButton.disabled = true;
-        const previousChannel = supabaseChannel;
-        supabaseChannel = null;
+        if (supabaseChannel) {
+            await supabaseChannel.unsubscribe();
+            supabaseChannel = null;
+        }
         if (peerConnection) {
             peerConnection.close();
             peerConnection = null;
         }
         currentPatientCode = null;
         currentPatientProfileId = null;
+        resetPatientEventHistory();
         caregiverClientId = null;
         activeNegotiationId = null;
         currentAnswerPayload = null;
         remoteCandidateBuffer.clear();
-        resetCaregiverPatientView();
+        if (button) button.disabled = true;
         setRealtimeStatus('查詢個案資料…', false);
-        if (previousChannel) {
-            try { await previousChannel.unsubscribe(); }
-            catch (error) { console.warn('[Caregiver] Previous channel could not close cleanly:', error); }
-        }
         const { data: profile, error } = await supabaseClient
             .from('patient_profiles')
             .select('*')
             .eq('patient_code', normalizedCode)
             .maybeSingle();
-        if (generation !== caregiverSessionGeneration) return false;
         if (error) throw error;
         if (!profile) {
             setRealtimeStatus('尚無此個案資料', false);
-            setPatientListStatus('此個案不存在或不屬於目前登入帳號。');
             if (!options.quiet) alert('找不到此個案。請先在使用者端以相同帳號選擇個案並開始用餐，再回來連線。');
             return false;
         }
         currentPatientCode = profile.patient_code;
         currentPatientProfileId = profile.id;
-        currentPatientBaselines = {
-            chew: Number(profile.baseline_chew_duration) || 0.85
-        };
-        const historyRangeSelect = document.getElementById('caregiver-history-range');
-        if (historyRangeSelect) historyRangeSelect.disabled = false;
         caregiverClientId = crypto.randomUUID();
         lastOfferRequestAt = 0;
-        if (select) select.value = profile.patient_code;
         document.getElementById('caregiver-patient-name').innerText = `${profile.full_name} (${profile.patient_code})`;
         document.getElementById('caregiver-diet-type').innerText = (CONFIG.DIET_PROFILES[profile.diet_type] || {}).name || profile.diet_type;
         document.getElementById('base-chew-sec').innerText = `${Number(profile.baseline_chew_duration || 0.85).toFixed(2)} 秒`;
         document.getElementById('base-swallow-sec').innerText = `${Number(profile.baseline_swallow_pause || 1.10).toFixed(2)} 秒`;
-        void fetchHistoricalSessions(normalizedCode, profile.id, generation)
-            .catch(error => console.error('[Caregiver] History load failed:', error));
-        await setupWebRTCSignaling(profile.id, generation);
+        if (button) button.innerText = `已選 ${profile.patient_code}`;
+        await fetchHistoricalSessions(normalizedCode, profile.id);
+        await setupWebRTCSignaling(profile.id);
         return true;
     } catch (error) {
         console.error('[Caregiver] Patient connection failed:', error);
@@ -271,11 +149,7 @@ async function connectToPatient(code = document.getElementById('caregiver-patien
         if (!options.quiet) alert('個案連線失敗。請確認個案代碼與兩端登入帳號相同。');
         return false;
     } finally {
-        patientSwitchInProgress = false;
-        const canConnect = Boolean(select?.value);
-        if (button) button.disabled = !canConnect;
-        if (select) select.disabled = !canConnect;
-        if (refreshButton) refreshButton.disabled = false;
+        if (button) button.disabled = false;
     }
 }
 
@@ -301,172 +175,95 @@ async function loadPatientProfile(code) {
 }
 
 // 3. 載入個案歷史用餐場次數據與繪製圖表
-async function fetchHistoricalSessions(code, patientId = null, generation = caregiverSessionGeneration, range = currentHistoryRange) {
-    const requestId = ++historyRequestGeneration;
-    const normalizedRange = range === '30days' ? '30days' : 'recent7';
-    const isCurrentRequest = () => generation === caregiverSessionGeneration
-        && requestId === historyRequestGeneration;
+async function fetchHistoricalSessions(code, patientId = null) {
     let sessionData = [];
-    let eventLogsAvailable = true;
-    let eventLogs = [];
-    let loadError = null;
-    let sessionLoadFailed = false;
+    let anomalyLogs = [];
+    let anomalyError = null;
     try {
         if (!patientId) {
             const { data: profile, error: profileError } = await supabaseClient
                 .from('patient_profiles').select('id').eq('patient_code', code).maybeSingle();
-            if (!isCurrentRequest()) return false;
             if (profileError) throw profileError;
             patientId = profile?.id;
         }
         if (patientId) {
-            let query = supabaseClient.from('meal_sessions')
+            const { data, error } = await supabaseClient
+                .from('meal_sessions')
                 .select('*')
-                .eq('patient_id', patientId);
-            if (normalizedRange === '30days') {
-                const cutoff = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-                query = query.gte('start_time', cutoff);
-            }
-            const sessionLimit = normalizedRange === '30days' ? 500 : 7;
-            const { data, error } = await query
-                .order('start_time', { ascending: false })
-                .limit(sessionLimit);
-            if (!isCurrentRequest()) return false;
+                .eq('patient_id', patientId)
+                .order('created_at', { ascending: false })
+                .limit(7);
             if (error) throw error;
-
-            const dateValue = session => {
-                const value = Date.parse(session.start_time || session.created_at);
-                return Number.isFinite(value) ? value : 0;
-            };
-            const sessions = (Array.isArray(data) ? data : [])
-                .slice()
-                .sort((a, b) => dateValue(a) - dateValue(b));
-            const sessionIds = sessions.map(session => session.id).filter(Boolean);
+            sessionData = window.ConnectionCore.latestSessionsChronological(data || [], 7);
+            const sessionIds = sessionData.map(session => session.id).filter(Boolean);
             if (sessionIds.length) {
-                try {
-                    const { data: logs, error: logsError } = await supabaseClient
-                        .from('anomaly_logs')
-                        .select('id, session_id, event_type, triggered_at, details, jaw_velocity, hands_on_neck')
-                        .in('session_id', sessionIds)
-                        .order('triggered_at', { ascending: true });
-                    if (!isCurrentRequest()) return false;
-                    if (logsError) throw logsError;
-                    eventLogs = Array.isArray(logs) ? logs : [];
-                } catch (error) {
-                    if (!isCurrentRequest()) return false;
-                    eventLogsAvailable = false;
-                    loadError = error;
-                    console.error('[Caregiver] Could not load meal event details:', error);
-                }
+                const { data: logs, error: logsError } = await supabaseClient
+                    .from('anomaly_logs')
+                    .select('id, session_id, event_type, triggered_at, details, jaw_velocity, hands_on_neck')
+                    .in('session_id', sessionIds)
+                    .order('triggered_at', { ascending: false })
+                    .limit(100);
+                if (logsError) throw logsError;
+                anomalyLogs = Array.isArray(logs) ? logs : [];
             }
-            sessionData = window.ConnectionCore.summarizeMealEventsBySession(
-                sessions, eventLogs, eventLogsAvailable
-            );
         }
     } catch (error) {
-        if (!isCurrentRequest()) return false;
-        loadError = error;
-        sessionLoadFailed = true;
-        console.error('[Caregiver] Could not load session history:', error);
-        sessionData = [];
+        anomalyError = error;
+        console.error('[Caregiver] Could not load session/anomaly history:', error);
     }
-    if (!isCurrentRequest()) return false;
     updateCharts(sessionData);
-    renderMealHistory(sessionData, normalizedRange);
-    setMealHistoryStatus(sessionLoadFailed
-        ? '用餐紀錄載入失敗，請稍後重試。'
-        : (loadError ? `已載入 ${sessionData.length} 餐；部分事件紀錄無法讀取。` : `顯示 ${sessionData.length} 餐。`));
-    return true;
+    renderStoredAnomalyLogs(anomalyLogs, anomalyError);
 }
 
-function setMealHistoryStatus(text) {
-    const status = document.getElementById('meal-history-status');
-    if (status) status.textContent = text;
-}
-
-function renderMealHistory(sessions, range = currentHistoryRange) {
-    const container = document.getElementById('meal-history-list');
-    if (!container) return;
-    container.replaceChildren();
-    if (!sessions.length) {
-        const empty = document.createElement('p');
-        empty.className = 'text-center py-6 text-xs text-slate-500 italic';
-        empty.textContent = '目前沒有符合範圍的用餐紀錄';
-        container.appendChild(empty);
+function renderStoredAnomalyLogs(logs, error = null) {
+    const status = document.getElementById('caregiver-anomaly-history-status');
+    const list = document.getElementById('caregiver-anomaly-history-list');
+    if (!status || !list) return;
+    if (error) {
+        status.textContent = '已儲存紀錄載入失敗；即時警報仍會顯示，請重新載入或確認照護帳號權限。';
         return;
     }
-
-    const eventLabels = {
-        COUGH: '一般咳嗽', L1: 'L1 含飯提醒', L2: 'L2 警報', L3: 'L3 警報',
-        L4: 'L4 緊急警報', L3_VISIBILITY: '疑似哽噎／畫面遮蔽（未確認）',
-        VISIBILITY_LOSS: '失臉／畫面遮蔽（未確認）'
-    };
-    const riskLabels = { NORMAL: '正常', ATTENTION: '需注意', HIGH_RISK: '高風險' };
-    const showSeconds = value => value === null || value === undefined || !Number.isFinite(Number(value))
-        ? '—' : `${Number(value).toFixed(2)} 秒`;
-
-    for (const session of sessions.slice().reverse()) {
-        const details = document.createElement('details');
-        details.className = 'bg-slate-950 border border-slate-800 rounded-xl px-3 py-2 text-xs';
-        const summary = document.createElement('summary');
-        summary.className = 'cursor-pointer text-slate-200 leading-relaxed';
-        const startDate = new Date(session.start_time || session.created_at);
-        const dateLabel = Number.isFinite(startDate.getTime())
-            ? startDate.toLocaleString('zh-TW', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit' })
+    list.replaceChildren();
+    const rows = Array.isArray(logs) ? logs : [];
+    const emptyMessage = document.getElementById('empty-log-msg');
+    if (rows.length && emptyMessage) emptyMessage.remove();
+    status.textContent = rows.length
+        ? `已載入近 7 餐的 ${rows.length} 筆已儲存事件，與即時警報顯示於同一清單。`
+        : '近 7 餐目前沒有已儲存事件；即時警報仍會顯示於此清單。';
+    const labels = { L1: '第一級提醒', L2: '第二級警報', L3: '第三級警報', L4: '第四級哽噎警報', COUGH: '咳嗽事件' };
+    for (const row of rows) {
+        const item = document.createElement('article');
+        item.className = 'rounded-xl border border-slate-800 bg-slate-950 p-3 text-xs space-y-1';
+        const heading = document.createElement('div');
+        heading.className = row.event_type === 'L4' ? 'font-bold text-rose-300' : 'font-semibold text-slate-200';
+        heading.textContent = labels[row.event_type] || String(row.event_type || '異常事件');
+        const timestamp = document.createElement('time');
+        const parsedTime = Date.parse(row.triggered_at || '');
+        timestamp.dateTime = Number.isFinite(parsedTime) ? new Date(parsedTime).toISOString() : '';
+        timestamp.className = 'block text-slate-500';
+        timestamp.textContent = Number.isFinite(parsedTime)
+            ? new Date(parsedTime).toLocaleString('zh-TW')
             : '時間未記錄';
-        const dietName = (CONFIG.DIET_PROFILES[session.diet_type] || {}).name || session.diet_type || '未記錄餐食';
-        const durationValue = session.total_duration_sec;
-        const duration = durationValue === null || durationValue === undefined || !Number.isFinite(Number(durationValue))
-            ? '時長未記錄' : `${Math.round(Number(durationValue) / 60)} 分鐘`;
-        const chewValue = session.total_chew_count;
-        const chews = chewValue === null || chewValue === undefined || !Number.isFinite(Number(chewValue))
-            ? '咀嚼數未記錄' : `咀嚼 ${Number(chewValue).toFixed(1)} 次`;
-        const swallowValue = session.total_swallow_count;
-        const swallows = swallowValue === null || swallowValue === undefined || !Number.isFinite(Number(swallowValue))
-            ? '吞嚥數未記錄' : `吞嚥 ${Number(swallowValue)} 次`;
-        summary.textContent = `${dateLabel}｜${dietName}｜${duration}｜${chews}｜${swallows}｜平均咀嚼 ${showSeconds(session.avg_chew_duration)}｜${riskLabels[session.risk_level] || session.risk_level || '風險未記錄'}`;
-        details.appendChild(summary);
-
-        const body = document.createElement('div');
-        body.className = 'mt-3 space-y-2 text-slate-300';
-        const countLine = document.createElement('p');
-        if (session.alertBreakdownAvailable && session.eventCounts) {
-            const counts = session.eventCounts;
-            countLine.textContent = `一般咳嗽 ${counts.cough}｜L1 ${counts.l1}｜L2 未啟用｜L3 ${counts.l3}｜L4 ${counts.l4}｜畫面遮蔽 ${counts.visibility}`;
-        } else if (Number(session.event_schema_version || 1) < 2) {
-            countLine.textContent = '舊資料：警報分級無法拆分';
-        } else {
-            countLine.textContent = '事件紀錄暫不可用，分級統計無法顯示';
+        item.appendChild(heading);
+        item.appendChild(timestamp);
+        if (row.details) {
+            const details = document.createElement('p');
+            details.className = 'text-slate-300 break-words';
+            details.textContent = String(row.details);
+            item.appendChild(details);
         }
-        body.appendChild(countLine);
-
-        if (session.events && session.events.length) {
-            const eventList = document.createElement('ul');
-            eventList.className = 'space-y-1 border-t border-slate-800 pt-2';
-            for (const event of session.events) {
-                const item = document.createElement('li');
-                const time = new Date(event.triggered_at);
-                const timeLabel = Number.isFinite(time.getTime())
-                    ? time.toLocaleTimeString('zh-TW', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-                    : '時間未記錄';
-                const label = eventLabels[String(event.event_type || '').toUpperCase()] || String(event.event_type || '未分類事件');
-                item.textContent = `${timeLabel}｜${label}${event.details ? `：${event.details}` : ''}`;
-                eventList.appendChild(item);
-            }
-            body.appendChild(eventList);
-        } else if (session.alertBreakdownAvailable) {
-            const noEvents = document.createElement('p');
-            noEvents.className = 'text-slate-500';
-            noEvents.textContent = '本餐沒有已記錄的咳嗽或警報事件';
-            body.appendChild(noEvents);
-        }
-        details.appendChild(body);
-        container.appendChild(details);
+        list.appendChild(item);
     }
 }
 
 // 4. Chart.js 圖表繪製與更新
 function initCharts() {
+    const palette = getComputedStyle(document.documentElement);
+    const chartMuted = palette.getPropertyValue('--tea-muted').trim() || '#7b6657';
+    const chartInk = palette.getPropertyValue('--tea-ink').trim() || '#554237';
+    const chartGrid = palette.getPropertyValue('--tea-border').trim() || '#d9c5b0';
+    const chartAccent = palette.getPropertyValue('--tea-accent').trim() || '#886246';
+    const chartFontSize = 10 * (window.FontSizeUI?.getPercent?.() || 100) / 100;
     const ctxAnomalies = document.getElementById('chart-anomalies').getContext('2d');
     const ctxChew = document.getElementById('chart-chew-trend').getContext('2d');
 
@@ -475,22 +272,18 @@ function initCharts() {
         data: {
             labels: [],
             datasets: [
-                { label: '一般咳嗽', data: [], backgroundColor: 'rgba(251, 191, 36, 0.75)' },
-                { label: 'L1 提醒', data: [], backgroundColor: 'rgba(96, 165, 250, 0.75)' },
-                { label: 'L2 未啟用', data: [], backgroundColor: 'rgba(148, 163, 184, 0.55)' },
-                { label: 'L3', data: [], backgroundColor: 'rgba(167, 139, 250, 0.75)' },
-                { label: 'L4 緊急警報', data: [], backgroundColor: 'rgba(244, 63, 94, 0.75)' },
-                { label: '畫面遮蔽', data: [], backgroundColor: 'rgba(34, 211, 238, 0.75)' }
+                { label: '含飯/發呆次數', data: [], backgroundColor: 'rgba(251, 191, 36, 0.7)' },
+                { label: '嗆咳/卡喉次數', data: [], backgroundColor: 'rgba(244, 63, 94, 0.7)' }
             ]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             scales: {
-                x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { display: false } },
-                y: { beginAtZero: true, ticks: { color: '#94a3b8', font: { size: 10 }, precision: 0 }, grid: { color: '#334155' } }
+                x: { ticks: { color: chartMuted, font: { size: chartFontSize } }, grid: { display: false } },
+                y: { ticks: { color: chartMuted, font: { size: chartFontSize } }, grid: { color: chartGrid } }
             },
-            plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 10 } } } }
+            plugins: { legend: { labels: { color: chartInk, font: { size: chartFontSize } } } }
         }
     });
 
@@ -499,62 +292,57 @@ function initCharts() {
         data: {
             labels: [],
             datasets: [
-                { label: '平均咀嚼耗時 (s)', data: [], borderColor: '#34d399', backgroundColor: 'rgba(52, 211, 153, 0.1)', fill: true, tension: 0.3 },
-                { label: '個案咀嚼基準', data: [], borderColor: '#60a5fa', borderDash: [4, 4], pointRadius: 0 }
+                { label: '平均咀嚼耗時（秒）', data: [], borderColor: '#486b42', backgroundColor: 'rgba(72, 107, 66, 0.1)', fill: true, tension: 0.3 },
+                { label: '對照基線（0.85 秒）', data: [0.85, 0.85, 0.85, 0.85, 0.85], borderColor: chartAccent, borderDash: [4, 4], pointRadius: 0 }
             ]
         },
         options: {
             responsive: true,
             maintainAspectRatio: false,
             scales: {
-                x: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { display: false } },
-                y: { ticks: { color: '#94a3b8', font: { size: 10 } }, grid: { color: '#334155' } }
+                x: { ticks: { color: chartMuted, font: { size: chartFontSize } }, grid: { display: false } },
+                y: { ticks: { color: chartMuted, font: { size: chartFontSize } }, grid: { color: chartGrid } }
             },
-            plugins: { legend: { labels: { color: '#cbd5e1', font: { size: 10 } } } }
+            plugins: { legend: { labels: { color: chartInk, font: { size: chartFontSize } } } }
         }
     });
+    if (!initCharts.fontPreferenceHandler) {
+        initCharts.fontPreferenceHandler = event => {
+            const percent = Number(event.detail?.percent) || window.FontSizeUI?.getPercent?.() || 100;
+            const size = 10 * Math.max(.8, Math.min(2, percent / 100));
+            for (const chart of [anomaliesChart, chewTrendChart]) {
+                if (!chart) continue;
+                chart.options.scales.x.ticks.font.size = size;
+                chart.options.scales.y.ticks.font.size = size;
+                chart.options.plugins.legend.labels.font.size = size;
+                chart.update();
+            }
+        };
+        window.addEventListener('ui-font-size-change', initCharts.fontPreferenceHandler);
+    }
 
-    updateCharts([]);
 }
 
-function updateCharts(sessions = []) {
-    if (!anomaliesChart || !chewTrendChart) return;
-    const labels = sessions.map(session => {
-        const date = new Date(session.start_time || session.created_at);
-        return Number.isFinite(date.getTime())
-            ? date.toLocaleDateString('zh-TW', { month: '2-digit', day: '2-digit' })
-            : '餐次';
-    });
-    const countFor = (session, key) => session.alertBreakdownAvailable && session.eventCounts
-        ? session.eventCounts[key] : null;
-    const valueFor = (session, key) => {
-        const value = session[key];
-        return value === null || value === undefined || value === '' || !Number.isFinite(Number(value))
-            ? null : Number(value);
-    };
+function updateCharts(sessions) {
+    const labels = sessions.map((s, idx) => `餐次 ${idx + 1}`);
+    const pouchings = sessions.map(s => s.pouching_events || 0);
+    const coughs = sessions.map(s => (s.cough_count_l2 || 0) + (s.choking_events_l3 || 0));
+    const chewAvg = sessions.map(s => s.avg_chew_duration || 0.85);
 
-    const eventSeries = [
-        sessions.map(session => countFor(session, 'cough')),
-        sessions.map(session => countFor(session, 'l1')),
-        sessions.map(session => session.alertBreakdownAvailable ? 0 : null),
-        sessions.map(session => countFor(session, 'l3')),
-        sessions.map(session => countFor(session, 'l4')),
-        sessions.map(session => countFor(session, 'visibility'))
-    ];
     anomaliesChart.data.labels = labels;
-    eventSeries.forEach((values, index) => { anomaliesChart.data.datasets[index].data = values; });
+    anomaliesChart.data.datasets[0].data = pouchings;
+    anomaliesChart.data.datasets[1].data = coughs;
     anomaliesChart.update();
 
     chewTrendChart.data.labels = labels;
-    chewTrendChart.data.datasets[0].data = sessions.map(session => valueFor(session, 'avg_chew_duration'));
-    chewTrendChart.data.datasets[1].data = new Array(labels.length).fill(currentPatientBaselines.chew);
+    chewTrendChart.data.datasets[0].data = chewAvg;
+    chewTrendChart.data.datasets[1].data = new Array(labels.length).fill(0.85);
     chewTrendChart.update();
 }
 
 // 5. WebRTC P2P 影音接收與 Supabase Realtime 信令
-async function setupWebRTCSignaling(profileId = currentPatientProfileId, generation = caregiverSessionGeneration) {
-    if (!supabaseClient || !profileId || !window.ConnectionCore
-        || generation !== caregiverSessionGeneration) return;
+async function setupWebRTCSignaling(profileId = currentPatientProfileId) {
+    if (!supabaseClient || !profileId || !window.ConnectionCore) return;
     try {
         if (supabaseChannel) await supabaseChannel.unsubscribe();
         activeNegotiationId = null;
@@ -568,38 +356,33 @@ async function setupWebRTCSignaling(profileId = currentPatientProfileId, generat
         supabaseChannel = channel;
         channel
             .on('broadcast', { event: 'signal' }, async ({ payload }) => {
-                if (channel !== supabaseChannel || generation !== caregiverSessionGeneration) return;
                 if (payload.type === 'patient_ready' && payload.profileId === currentPatientProfileId) {
-                    requestOffer(channel, true, generation);
+                    requestOffer(channel, true);
                 } else if (payload.type === 'offer' && payload.negotiationId && payload.clientId === caregiverClientId) {
-                    await handleOfferAndAnswer(payload.sdp, payload.negotiationId, payload.clientId, channel, generation);
+                    await handleOfferAndAnswer(payload.sdp, payload.negotiationId, payload.clientId);
                 } else if (payload.type === 'candidate') {
                     await receiveRemoteCandidate(payload);
                 }
             })
             .on('broadcast', { event: 'state_update' }, ({ payload }) => {
-                if (channel === supabaseChannel && generation === caregiverSessionGeneration
-                    && payload.patientCode === currentPatientCode) handleStateUpdate(payload);
+                if (payload.patientCode === currentPatientCode) handleStateUpdate(payload);
             })
             .subscribe((status) => {
-                if (channel !== supabaseChannel || generation !== caregiverSessionGeneration) return;
                 if (status === 'SUBSCRIBED') {
                     setRealtimeStatus(`已連線 ${currentPatientCode}，等待使用者端…`, true);
-                    requestOffer(channel, false, generation);
+                    requestOffer(channel);
                 } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-                    setRealtimeStatus(`連線失敗：${status}`, false);
+                    setRealtimeStatus({ CHANNEL_ERROR: '連線發生錯誤，請重試', TIMED_OUT: '連線逾時，請重試', CLOSED: '連線已關閉' }[status], false);
                 }
             });
     } catch (error) {
-        if (generation !== caregiverSessionGeneration) return;
-        setRealtimeStatus('Realtime 頻道建立失敗', false);
+        setRealtimeStatus('即時連線建立失敗', false);
         console.error('[WebRTC Signalling] Caregiver channel error:', error);
     }
 }
 
-function requestOffer(channel, force = false, generation = caregiverSessionGeneration) {
-    if (channel !== supabaseChannel || !currentPatientProfileId
-        || generation !== caregiverSessionGeneration) return;
+function requestOffer(channel, force = false) {
+    if (channel !== supabaseChannel || !currentPatientProfileId) return;
     const now = Date.now();
     if (!force && now - lastOfferRequestAt < 500) return;
     lastOfferRequestAt = now;
@@ -637,49 +420,41 @@ async function flushRemoteCandidates(connection, negotiationId, clientId) {
     }
 }
 
-async function sendActiveAnswer(channel = supabaseChannel, generation = caregiverSessionGeneration) {
-    if (!channel || channel !== supabaseChannel || generation !== caregiverSessionGeneration || !currentAnswerPayload) return;
-    const answerPayload = currentAnswerPayload;
-    const result = await channel.send({
+async function sendActiveAnswer() {
+    if (!supabaseChannel || !currentAnswerPayload) return;
+    const result = await supabaseChannel.send({
         type: 'broadcast',
         event: 'signal',
-        payload: answerPayload
+        payload: currentAnswerPayload
     });
-    if (channel !== supabaseChannel || generation !== caregiverSessionGeneration) return;
     if (result !== 'ok') console.warn('[WebRTC] Answer send status:', result);
 }
 
-async function handleOfferAndAnswer(offerSdp, negotiationId, clientId, channel, generation) {
-    if (!negotiationId || !clientId || clientId !== caregiverClientId
-        || channel !== supabaseChannel || generation !== caregiverSessionGeneration) return;
+async function handleOfferAndAnswer(offerSdp, negotiationId, clientId) {
+    if (!negotiationId || !clientId || clientId !== caregiverClientId) return;
     if (activeNegotiationId === negotiationId && currentAnswerPayload) {
-        await sendActiveAnswer(channel, generation);
+        await sendActiveAnswer();
         return;
     }
     return negotiationGate.run(`${clientId}:${negotiationId}`, async () => {
-        if (channel !== supabaseChannel || generation !== caregiverSessionGeneration) return;
         if (activeNegotiationId === negotiationId && currentAnswerPayload) {
-            await sendActiveAnswer(channel, generation);
+            await sendActiveAnswer();
             return;
         }
-        await processOfferAndAnswer(offerSdp, negotiationId, clientId, channel, generation);
+        await processOfferAndAnswer(offerSdp, negotiationId, clientId);
     });
 }
 
-async function processOfferAndAnswer(offerSdp, negotiationId, clientId, channel, generation) {
-    if (channel !== supabaseChannel || generation !== caregiverSessionGeneration) return;
+async function processOfferAndAnswer(offerSdp, negotiationId, clientId) {
     const pending = remoteCandidateBuffer.drain();
     pending.filter(payload => payload.negotiationId === negotiationId && payload.clientId === clientId)
         .forEach(payload => remoteCandidateBuffer.enqueue(payload));
-    let activeConnection = null;
     try {
         if (peerConnection) peerConnection.close();
         activeNegotiationId = negotiationId;
         currentAnswerPayload = null;
-        activeConnection = new RTCPeerConnection(CONFIG.RTC_CONFIG);
-        peerConnection = activeConnection;
-        activeConnection.ontrack = (event) => {
-            if (peerConnection !== activeConnection || generation !== caregiverSessionGeneration) return;
+        peerConnection = new RTCPeerConnection(CONFIG.RTC_CONFIG);
+        peerConnection.ontrack = (event) => {
             const remoteVideo = document.getElementById('remote-video');
             if (remoteVideo && event.streams && event.streams[0]) {
                 remoteVideo.srcObject = event.streams[0];
@@ -687,16 +462,15 @@ async function processOfferAndAnswer(offerSdp, negotiationId, clientId, channel,
                 console.log('[WebRTC P2P] Video stream attached successfully!');
             }
         };
-        activeConnection.onconnectionstatechange = () => {
-            if (peerConnection !== activeConnection || generation !== caregiverSessionGeneration) return;
-            const state = activeConnection.connectionState;
+        peerConnection.onconnectionstatechange = () => {
+            const state = peerConnection && peerConnection.connectionState;
             if (state === 'connected') setRealtimeStatus(`視訊已連線 ${currentPatientCode}`, true);
             else if (state === 'failed' || state === 'disconnected') setRealtimeStatus(`視訊${state === 'failed' ? '連線失敗' : '中斷'}`, false);
         };
+        const activeConnection = peerConnection;
         activeConnection.onicecandidate = async (event) => {
-            if (event.candidate && peerConnection === activeConnection
-                && channel === supabaseChannel && generation === caregiverSessionGeneration) {
-                await channel.send({
+            if (event.candidate && supabaseChannel) {
+                await supabaseChannel.send({
                     type: 'broadcast',
                     event: 'signal',
                     payload: { type: 'candidate', candidate: event.candidate, negotiationId, clientId }
@@ -704,39 +478,24 @@ async function processOfferAndAnswer(offerSdp, negotiationId, clientId, channel,
             }
         };
         await activeConnection.setRemoteDescription(new RTCSessionDescription(offerSdp));
-        if (peerConnection !== activeConnection || channel !== supabaseChannel
-            || generation !== caregiverSessionGeneration) return;
         await flushRemoteCandidates(activeConnection, negotiationId, clientId);
-        if (peerConnection !== activeConnection || channel !== supabaseChannel
-            || generation !== caregiverSessionGeneration) return;
         const answer = await activeConnection.createAnswer();
-        if (peerConnection !== activeConnection || channel !== supabaseChannel
-            || generation !== caregiverSessionGeneration) return;
         await activeConnection.setLocalDescription(answer);
-        if (peerConnection !== activeConnection || channel !== supabaseChannel
-            || generation !== caregiverSessionGeneration) return;
         currentAnswerPayload = { type: 'answer', sdp: answer, negotiationId, clientId };
-        await sendActiveAnswer(channel, generation);
+        await sendActiveAnswer();
     } catch (error) {
-        if (activeConnection && (peerConnection !== activeConnection
-            || channel !== supabaseChannel || generation !== caregiverSessionGeneration)) return;
         console.error('[WebRTC Answer Error]:', error);
         setRealtimeStatus('視訊協商失敗', false);
     }
 }
 
 // 6. 即時狀態數據與警報跳窗更新
+function alertLevelLabel(level) {
+    return { L1: '第一級', L2: '第二級', L3: '第三級', L4: '第四級' }[level] || '照護提醒';
+}
+
 function handleStateUpdate(state) {
-    const statChews = document.getElementById('stat-chews');
-    if (statChews) statChews.innerText = state.totalChews || 0;
-    const statSwallows = document.getElementById('stat-swallows');
-    if (statSwallows) statSwallows.innerText = state.totalSwallows || 0;
-    const statJawVel = document.getElementById('stat-jaw-vel');
-    if (statJawVel) statJawVel.innerText = state.jawVelocity ? state.jawVelocity.toFixed(2) : '0.00';
-    const statPouching = document.getElementById('stat-pouching');
-    if (statPouching) statPouching.innerText = state.pouchingEvents || 0;
-    const statCoughs = document.getElementById('stat-coughs');
-    if (statCoughs) statCoughs.innerText = state.coughEvents || 0;
+    document.getElementById('stat-coughs').innerText = state.coughEvents || 0;
 
     const dietInfo = CONFIG.DIET_PROFILES[state.dietType];
     if (dietInfo) {
@@ -744,17 +503,43 @@ function handleStateUpdate(state) {
     }
 
     if (state.activeAlertLevel) {
-        const alertMessage = state.activeAlertMessage || `${state.patientName} 觸發 ${state.activeAlertLevel} 警報！`;
-        showCaregiverAlert(state.activeAlertLevel, alertMessage);
-        if (state.activeAlertLevel !== lastLoggedAlertLevel || alertMessage !== lastLoggedAlertMessage) {
-            addRealtimeLog(state.activeAlertLevel, alertMessage);
+        activeCaregiverAlertLevel = state.activeAlertLevel;
+        if (state.activeAlertLevel === 'L3' || state.activeAlertLevel === 'L4') {
+            if (pendingCaregiverAlertLevel !== state.activeAlertLevel) {
+                pendingCaregiverAlertLevel = state.activeAlertLevel;
+                caregiverAlertAcknowledged = false;
+                showCaregiverEmergencyPopup(state.activeAlertLevel, state.patientName);
+                playBuzzerSound();
+            }
+            showCaregiverAlert(pendingCaregiverAlertLevel);
+        } else {
+            if (pendingCaregiverAlertLevel && caregiverAlertAcknowledged) {
+                pendingCaregiverAlertLevel = null;
+                caregiverAlertAcknowledged = false;
+                hideCaregiverEmergencyPopup();
+            }
+            showCaregiverAlert(pendingCaregiverAlertLevel && !caregiverAlertAcknowledged
+                ? pendingCaregiverAlertLevel
+                : state.activeAlertLevel);
+            if (!pendingCaregiverAlertLevel || caregiverAlertAcknowledged) playBuzzerSound();
+        }
+        if (state.activeAlertLevel !== lastLoggedAlertLevel) {
+            addRealtimeLog(state.activeAlertLevel, `${state.patientName} 觸發${alertLevelLabel(state.activeAlertLevel)}警報！`);
             lastLoggedAlertLevel = state.activeAlertLevel;
-            lastLoggedAlertMessage = alertMessage;
         }
     } else {
-        hideCaregiverAlert();
-        lastLoggedAlertLevel = null;
-        lastLoggedAlertMessage = null;
+        activeCaregiverAlertLevel = null;
+        if (pendingCaregiverAlertLevel && !caregiverAlertAcknowledged) {
+            showCaregiverAlert(pendingCaregiverAlertLevel);
+            playBuzzerSound();
+            lastLoggedAlertLevel = pendingCaregiverAlertLevel;
+        } else {
+            hideCaregiverAlert();
+            hideCaregiverEmergencyPopup();
+            pendingCaregiverAlertLevel = null;
+            caregiverAlertAcknowledged = false;
+            lastLoggedAlertLevel = null;
+        }
     }
     if (state.sessionEnded) {
         const remoteVideo = document.getElementById('remote-video');
@@ -767,53 +552,53 @@ function handleStateUpdate(state) {
     }
 }
 
-function showCaregiverAlert(level, message = null) {
+function showCaregiverAlert(level) {
     const banner = document.getElementById('caregiver-alert-banner');
     const text = document.getElementById('caregiver-alert-text');
-    const resolvedMsg = message || `觸發 ${level} 嚴重警報！請立即關注個案`;
-    text.innerText = resolvedMsg;
+    text.innerText = `觸發${alertLevelLabel(level)}嚴重警報！請立即查看個案狀況`;
     banner.classList.remove('hidden');
-    playBuzzerSound();
-    if (level === 'L4') {
-        showL4WebNotificationToast(resolvedMsg);
-    }
 }
 
 function hideCaregiverAlert() {
     document.getElementById('caregiver-alert-banner').classList.add('hidden');
-    dismissL4WebNotificationToast();
     stopBuzzerSound();
 }
 
-function showL4WebNotificationToast(message) {
-    const toast = document.getElementById('l4-web-notification-toast');
-    if (toast) {
-        const timeEl = document.getElementById('l4-web-notification-time');
-        const titleEl = document.getElementById('l4-web-notification-title');
-        const bodyEl = document.getElementById('l4-web-notification-body');
-        const statusEl = document.getElementById('l4-web-notification-status');
-        const patientNameEl = document.getElementById('caregiver-patient-name');
-        const patientName = (patientNameEl && patientNameEl.innerText) ? patientNameEl.innerText : '監看個案';
-        if (timeEl) timeEl.textContent = new Date().toTimeString().split(' ')[0];
-        if (titleEl) titleEl.textContent = `L4 進食安全提醒（${patientName}）`;
-        if (bodyEl) bodyEl.textContent = message;
-        if (statusEl) statusEl.textContent = '🔔 照護端網頁即時通知已跳出（已同步觸發 Gmail 通知）';
-        toast.classList.remove('hidden');
-    }
-    try {
-        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
-            new Notification('🚨 L4 進食安全提醒（急性哽噎）', { body: message });
-        }
-    } catch (e) {}
+function showCaregiverEmergencyPopup(level, patientName) {
+    const popup = document.getElementById('caregiver-emergency-popup');
+    const title = document.getElementById('caregiver-emergency-title');
+    const description = document.getElementById('caregiver-emergency-text');
+    if (!popup || !title || !description) return;
+
+    title.innerText = level === 'L4'
+        ? '🚨 第四級急性哽噎緊急警報'
+        : '⚠️ 第三級視覺遮蔽警示';
+    description.innerText = `${patientName || '個案'}觸發${alertLevelLabel(level)}警報，請立即查看並確認狀況。`;
+    popup.classList.remove('hidden');
+    document.getElementById('caregiver-alert-ack')?.focus?.();
 }
 
-function dismissL4WebNotificationToast() {
-    const toast = document.getElementById('l4-web-notification-toast');
-    if (toast) toast.classList.add('hidden');
+function hideCaregiverEmergencyPopup() {
+    document.getElementById('caregiver-emergency-popup')?.classList.add('hidden');
 }
-if (typeof window !== 'undefined') {
-    window.showL4WebNotificationToast = showL4WebNotificationToast;
-    window.dismissL4WebNotificationToast = dismissL4WebNotificationToast;
+
+function acknowledgeCaregiverAlert() {
+    if (!pendingCaregiverAlertLevel || caregiverAlertAcknowledged) return;
+    caregiverAlertAcknowledged = true;
+    hideCaregiverEmergencyPopup();
+    if (!activeCaregiverAlertLevel) {
+        hideCaregiverAlert();
+        pendingCaregiverAlertLevel = null;
+        caregiverAlertAcknowledged = false;
+        lastLoggedAlertLevel = null;
+    } else if (activeCaregiverAlertLevel !== 'L3' && activeCaregiverAlertLevel !== 'L4') {
+        stopBuzzerSound();
+        pendingCaregiverAlertLevel = null;
+        caregiverAlertAcknowledged = false;
+        showCaregiverAlert(activeCaregiverAlertLevel);
+    } else {
+        stopBuzzerSound();
+    }
 }
 
 function addRealtimeLog(level, msg) {
@@ -838,7 +623,7 @@ function addRealtimeLog(level, msg) {
 
     const badge = document.createElement('span');
     badge.className = 'text-[10px] bg-slate-900 px-2 py-0.5 rounded text-slate-400 border border-slate-700';
-    badge.textContent = level;
+    badge.textContent = alertLevelLabel(level);
     logItem.append(left, badge);
     container.insertBefore(logItem, container.firstChild);
 }
@@ -849,12 +634,24 @@ function toggleAudioMute() {
     document.getElementById('sound-icon').innerText = audioMuted ? '🔇' : '🔊';
     document.getElementById('sound-text').innerText = audioMuted ? '警報音效: 靜音' : '警報音效: 開啟';
     if (audioMuted) stopBuzzerSound();
+    else if ((pendingCaregiverAlertLevel && !caregiverAlertAcknowledged) ||
+        (activeCaregiverAlertLevel && activeCaregiverAlertLevel !== 'L3' && activeCaregiverAlertLevel !== 'L4')) {
+        playBuzzerSound();
+    }
+}
+
+function unlockAlertAudio() {
+    try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === 'suspended') audioCtx.resume()?.catch?.(() => {});
+    } catch (e) {}
 }
 
 function playBuzzerSound() {
     if (audioMuted || buzzerInterval) return;
     try {
-        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        unlockAlertAudio();
+        if (!audioCtx) return;
         buzzerInterval = setInterval(() => {
             const osc = audioCtx.createOscillator();
             const gain = audioCtx.createGain();
